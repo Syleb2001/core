@@ -199,7 +199,8 @@ pub mod behaviour {
         ) -> Self {
             let (identity, namespace) = identify_params;
             let agent_version = format!("asb/{} ({})", env!("CARGO_PKG_VERSION"), namespace);
-            let protocol_version = "/comit/xmr/btc/1.0.0".to_string();
+            let protocol_version =
+                swap_p2p::protocols::identify_protocol_version(env_config.chain).to_string();
 
             let identifyConfig = identify::Config::new(protocol_version, identity.public())
                 .with_agent_version(agent_version);
@@ -232,7 +233,7 @@ pub mod behaviour {
             Self {
                 connection_limits: connection_limits::Behaviour::new(connection_limits),
                 rendezvous: Toggle::from(behaviour),
-                quote: quote::alice(request_response_metrics.clone()),
+                quote: quote::alice(env_config.chain, request_response_metrics.clone()),
                 swap_setup: alice::Behaviour::new(
                     min_buy,
                     max_buy,
@@ -240,9 +241,16 @@ pub mod behaviour {
                     latest_rate,
                     resume_only,
                 ),
-                transfer_proof: transfer_proof::alice(request_response_metrics.clone()),
-                encrypted_signature: encrypted_signature::alice(request_response_metrics.clone()),
+                transfer_proof: transfer_proof::alice(
+                    env_config.chain,
+                    request_response_metrics.clone(),
+                ),
+                encrypted_signature: encrypted_signature::alice(
+                    env_config.chain,
+                    request_response_metrics.clone(),
+                ),
                 cooperative_xmr_redeem: cooperative_xmr_redeem_after_punish::alice(
+                    env_config.chain,
                     request_response_metrics,
                 ),
                 ping: ping::Behaviour::new(pingConfig),

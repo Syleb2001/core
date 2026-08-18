@@ -282,7 +282,7 @@ pub async fn main() -> Result<()> {
                 price_validity_duration,
             )
             .context("Invalid price feed configuration")?;
-            let namespace = XmrBtcNamespace::from_is_testnet(testnet);
+            let namespace = XmrBtcNamespace::for_chain(env_config.chain, testnet);
 
             // Initialize and bootstrap Tor client
             let tor_client = create_tor_client(&config.data.dir).await?;

@@ -15,8 +15,6 @@ use swap_env::env;
 use swap_p2p::observe;
 pub use swap_p2p::out_event::bob::OutEvent;
 
-const PROTOCOL_VERSION: &str = "/comit/xmr/btc/1.0.0";
-
 const INITIAL_REDIAL_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_REDIAL_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -61,14 +59,16 @@ impl Behaviour {
         rendezvous_nodes: Vec<PeerId>,
         wormhole_store: Arc<dyn wormhole::WormholeStore + Send + Sync>,
     ) -> Self {
-        let identifyConfig = identify::Config::new(PROTOCOL_VERSION.to_string(), identity.public())
+        let protocol_version =
+            swap_p2p::protocols::identify_protocol_version(env_config.chain).to_string();
+        let identifyConfig = identify::Config::new(protocol_version, identity.public())
             .with_agent_version(agent_version(namespace));
 
         let pingConfig = ping::Config::new().with_timeout(Duration::from_secs(60));
 
         Self {
-            direct_quote: quote::bob(),
-            quotes: quotes_cached::Behaviour::new(identifyConfig),
+            direct_quote: quote::bob(env_config.chain),
+            quotes: quotes_cached::Behaviour::new(env_config.chain, identifyConfig),
 
             discovery: rendezvous::discovery::Behaviour::new(
                 identity,
@@ -78,9 +78,9 @@ impl Behaviour {
             observe: observe::Behaviour::new(),
 
             swap_setup: bob::Behaviour::new(env_config, bitcoin_wallet),
-            transfer_proof: transfer_proof::bob(),
-            encrypted_signature: encrypted_signature::bob(),
-            cooperative_xmr_redeem: cooperative_xmr_redeem_after_punish::bob(),
+            transfer_proof: transfer_proof::bob(env_config.chain),
+            encrypted_signature: encrypted_signature::bob(env_config.chain),
+            cooperative_xmr_redeem: cooperative_xmr_redeem_after_punish::bob(env_config.chain),
 
             wormhole: wormhole::bob::Behaviour::new(wormhole_store),
             redial: redial::Behaviour::new("makers", INITIAL_REDIAL_INTERVAL, MAX_REDIAL_INTERVAL),
