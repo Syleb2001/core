@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::defaults::{
-    DEFAULT_MAX_BUY_AMOUNT, DEFAULT_MIN_BUY_AMOUNT, DEFAULT_SPREAD, default_rendezvous_points,
+    DEFAULT_MAX_BUY_AMOUNT, DEFAULT_MAX_BUY_AMOUNT_LTC, DEFAULT_MIN_BUY_AMOUNT,
+    DEFAULT_MIN_BUY_AMOUNT_LTC, DEFAULT_SPREAD, default_rendezvous_points,
 };
 use anyhow::{Context, Result, bail};
 use console::{Style, Term};
@@ -10,7 +11,24 @@ use dialoguer::{Input, Select, theme::ColorfulTheme};
 use libp2p::Multiaddr;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
+use swap_chain::Chain;
 use url::Url;
+
+/// Prompt user for the script chain this ASB will serve
+pub fn script_chain() -> Result<Chain> {
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(
+            "Which pair should this ASB serve? Each ASB process serves exactly one script chain",
+        )
+        .items(&["Bitcoin (sell XMR for BTC)", "Litecoin (sell XMR for LTC)"])
+        .default(0)
+        .interact()?;
+
+    Ok(match selection {
+        0 => Chain::Bitcoin,
+        _ => Chain::Litecoin,
+    })
+}
 
 /// Prompt user for data directory
 pub fn data_directory(default_data_dir: &Path) -> Result<PathBuf> {
@@ -27,10 +45,10 @@ pub fn data_directory(default_data_dir: &Path) -> Result<PathBuf> {
     Ok(data_dir.as_str().parse()?)
 }
 
-/// Prompt user for Bitcoin confirmation target
-pub fn bitcoin_confirmation_target(default_target: u16) -> Result<u16> {
+/// Prompt user for the script-chain confirmation target
+pub fn bitcoin_confirmation_target(chain: Chain, default_target: u16) -> Result<u16> {
     Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("How fast should your Bitcoin transactions be confirmed? Your transaction fee will be calculated based on this target. Hit return to use default")
+        .with_prompt(format!("How fast should your {} transactions be confirmed? Your transaction fee will be calculated based on this target. Hit return to use default", chain.params().ticker))
         .default(default_target)
         .interact_text()
         .map_err(Into::into)
@@ -150,20 +168,34 @@ pub fn tor_hidden_service() -> Result<bool> {
     Ok(selection == 0)
 }
 
-/// Prompt user for minimum Bitcoin buy amount
-pub fn min_buy_amount() -> Result<bitcoin::Amount> {
+/// Prompt user for the minimum buy amount, denominated in the script chain
+pub fn min_buy_amount(chain: Chain) -> Result<bitcoin::Amount> {
+    let default = match chain {
+        Chain::Bitcoin => DEFAULT_MIN_BUY_AMOUNT,
+        Chain::Litecoin => DEFAULT_MIN_BUY_AMOUNT_LTC,
+    };
     let min_buy = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter minimum Bitcoin amount you are willing to accept per swap or hit enter to use default.")
-        .default(DEFAULT_MIN_BUY_AMOUNT)
+        .with_prompt(format!(
+            "Enter minimum {} amount you are willing to accept per swap or hit enter to use default.",
+            chain.params().ticker
+        ))
+        .default(default)
         .interact_text()?;
     bitcoin::Amount::from_btc(min_buy).map_err(Into::into)
 }
 
-/// Prompt user for maximum Bitcoin buy amount
-pub fn max_buy_amount() -> Result<bitcoin::Amount> {
+/// Prompt user for the maximum buy amount, denominated in the script chain
+pub fn max_buy_amount(chain: Chain) -> Result<bitcoin::Amount> {
+    let default = match chain {
+        Chain::Bitcoin => DEFAULT_MAX_BUY_AMOUNT,
+        Chain::Litecoin => DEFAULT_MAX_BUY_AMOUNT_LTC,
+    };
     let max_buy = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter maximum Bitcoin amount you are willing to accept per swap or hit enter to use default.")
-        .default(DEFAULT_MAX_BUY_AMOUNT)
+        .with_prompt(format!(
+            "Enter maximum {} amount you are willing to accept per swap or hit enter to use default.",
+            chain.params().ticker
+        ))
+        .default(default)
         .interact_text()?;
 
     bitcoin::Amount::from_btc(max_buy).map_err(Into::into)

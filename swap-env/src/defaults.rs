@@ -1,5 +1,5 @@
 use crate::config::RefundPolicy;
-use crate::env::{Mainnet, Testnet};
+use crate::env::{LitecoinMainnet, LitecoinTestnet, Mainnet, Testnet};
 use anyhow::{Context, Result};
 use libp2p::Multiaddr;
 use rust_decimal::Decimal;
@@ -37,6 +37,9 @@ pub const DEFAULT_DEVELOPER_TIP_ADDRESS_STAGENET: &str = "54ZYC5tgGRoKMJDLviAcJF
 
 pub const DEFAULT_MIN_BUY_AMOUNT: f64 = 0.002f64;
 pub const DEFAULT_MAX_BUY_AMOUNT: f64 = 0.02f64;
+// Roughly the same fiat order of magnitude as the Bitcoin defaults above
+pub const DEFAULT_MIN_BUY_AMOUNT_LTC: f64 = 0.1f64;
+pub const DEFAULT_MAX_BUY_AMOUNT_LTC: f64 = 10.0f64;
 pub const DEFAULT_SPREAD: f64 = 0.02f64;
 
 pub const KRAKEN_PRICE_TICKER_WS_URL: &str = "wss://ws.kraken.com";
@@ -94,6 +97,33 @@ pub fn default_electrum_servers_testnet() -> Vec<Url> {
     ]
 }
 
+/// Public Litecoin Electrum servers (ElectrumX-LTC / Fulcrum ecosystem).
+///
+/// Initial candidate list: verify availability with
+/// `dev-scripts/health_check_default_electrum_servers.py` before relying
+/// on it in production.
+pub fn default_electrum_servers_litecoin_mainnet() -> Vec<Url> {
+    vec![
+        Url::parse("ssl://electrum-ltc.bysh.me:50002")
+            .expect("default electrum server url to be valid"),
+        Url::parse("ssl://electrum.ltc.xurious.com:50002")
+            .expect("default electrum server url to be valid"),
+        Url::parse("ssl://backup.electrum-ltc.org:443")
+            .expect("default electrum server url to be valid"),
+    ]
+}
+
+/// Public Litecoin testnet Electrum servers. Sparse ecosystem —
+/// running your own server is recommended for serious testing.
+pub fn default_electrum_servers_litecoin_testnet() -> Vec<Url> {
+    vec![
+        Url::parse("ssl://electrum.ltc.xurious.com:51002")
+            .expect("default electrum server url to be valid"),
+        Url::parse("ssl://electrum-ltc.bysh.me:51002")
+            .expect("default electrum server url to be valid"),
+    ]
+}
+
 pub trait GetDefaults {
     fn get_config_file_defaults() -> Result<Defaults>;
 }
@@ -145,6 +175,52 @@ impl GetDefaults for Testnet {
             data_dir: default_asb_data_dir()?.join("testnet"),
             listen_address_tcp: Multiaddr::from_str("/ip4/0.0.0.0/tcp/9839")?,
             electrum_rpc_urls: default_electrum_servers_testnet(),
+            price_ticker_ws_url_kraken: Url::parse(KRAKEN_PRICE_TICKER_WS_URL)?,
+            price_ticker_ws_url_bitfinex: Url::parse(BITFINEX_PRICE_TICKER_WS_URL)?,
+            price_ticker_rest_url_kucoin: Url::parse(KUCOIN_PRICE_TICKER_REST_URL)?,
+            price_ticker_rest_url_exolix: Url::parse(EXOLIX_PRICE_TICKER_REST_URL)?,
+            bitcoin_confirmation_target: 1,
+            use_mempool_space_fee_estimation: true,
+            developer_tip: Decimal::ZERO,
+            refund_policy: RefundPolicy::default(),
+        };
+
+        Ok(defaults)
+    }
+}
+
+impl GetDefaults for LitecoinMainnet {
+    fn get_config_file_defaults() -> Result<Defaults> {
+        let defaults = Defaults {
+            config_path: default_asb_config_dir()?
+                .join("mainnet-ltc")
+                .join("config.toml"),
+            data_dir: default_asb_data_dir()?.join("mainnet-ltc"),
+            listen_address_tcp: Multiaddr::from_str("/ip4/0.0.0.0/tcp/9739")?,
+            electrum_rpc_urls: default_electrum_servers_litecoin_mainnet(),
+            price_ticker_ws_url_kraken: Url::parse(KRAKEN_PRICE_TICKER_WS_URL)?,
+            price_ticker_ws_url_bitfinex: Url::parse(BITFINEX_PRICE_TICKER_WS_URL)?,
+            price_ticker_rest_url_kucoin: Url::parse(KUCOIN_PRICE_TICKER_REST_URL)?,
+            price_ticker_rest_url_exolix: Url::parse(EXOLIX_PRICE_TICKER_REST_URL)?,
+            bitcoin_confirmation_target: 1,
+            use_mempool_space_fee_estimation: true,
+            developer_tip: Decimal::ZERO,
+            refund_policy: RefundPolicy::default(),
+        };
+
+        Ok(defaults)
+    }
+}
+
+impl GetDefaults for LitecoinTestnet {
+    fn get_config_file_defaults() -> Result<Defaults> {
+        let defaults = Defaults {
+            config_path: default_asb_config_dir()?
+                .join("testnet-ltc")
+                .join("config.toml"),
+            data_dir: default_asb_data_dir()?.join("testnet-ltc"),
+            listen_address_tcp: Multiaddr::from_str("/ip4/0.0.0.0/tcp/9639")?,
+            electrum_rpc_urls: default_electrum_servers_litecoin_testnet(),
             price_ticker_ws_url_kraken: Url::parse(KRAKEN_PRICE_TICKER_WS_URL)?,
             price_ticker_ws_url_bitfinex: Url::parse(BITFINEX_PRICE_TICKER_WS_URL)?,
             price_ticker_rest_url_kucoin: Url::parse(KUCOIN_PRICE_TICKER_REST_URL)?,

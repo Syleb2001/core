@@ -62,6 +62,15 @@ pub struct Testnet;
 #[derive(Clone, Copy)]
 pub struct Regtest;
 
+#[derive(Clone, Copy)]
+pub struct LitecoinMainnet;
+
+#[derive(Clone, Copy)]
+pub struct LitecoinTestnet;
+
+#[derive(Clone, Copy)]
+pub struct LitecoinRegtest;
+
 impl GetConfig for Mainnet {
     fn get_config() -> Config {
         Config {
@@ -132,19 +141,86 @@ impl GetConfig for Regtest {
     }
 }
 
+// The Litecoin environments keep the same wall-clock durations as their
+// Bitcoin counterparts: Litecoin blocks arrive every 2.5 minutes instead of
+// every 10, so every block-denominated value is scaled by 4.
+impl GetConfig for LitecoinMainnet {
+    fn get_config() -> Config {
+        Config {
+            chain: Chain::Litecoin,
+            bitcoin_lock_mempool_timeout: 10.std_minutes(),
+            // ~24 Litecoin blocks, same policy as Bitcoin's 2h (~12 blocks)
+            bitcoin_lock_confirmed_timeout: 1.std_hours(),
+            // Litecoin has considerably less hashrate than Bitcoin,
+            // so we require one extra confirmation
+            bitcoin_finality_confirmations: 2,
+            bitcoin_blocks_till_confirmed_upper_bound_assumption: 6,
+            bitcoin_avg_block_time: 150.std_seconds(),
+            bitcoin_cancel_timelock: 24 * 4,
+            bitcoin_punish_timelock: 144 * 4,
+            bitcoin_remaining_refund_timelock: 2 * 4,
+            // The shadow network Litecoin runs on internally
+            bitcoin_network: bitcoin::Network::Bitcoin,
+            monero_avg_block_time: 2.std_minutes(),
+            monero_lock_retry_timeout: 10.std_minutes(),
+            monero_finality_confirmations: 10,
+            monero_double_spend_safe_confirmations: 10,
+            monero_network: monero_address::Network::Mainnet,
+        }
+    }
+}
+
+impl GetConfig for LitecoinTestnet {
+    fn get_config() -> Config {
+        Config {
+            chain: Chain::Litecoin,
+            bitcoin_lock_mempool_timeout: 10.std_minutes(),
+            bitcoin_lock_confirmed_timeout: 1.std_hours(),
+            bitcoin_finality_confirmations: 2,
+            bitcoin_blocks_till_confirmed_upper_bound_assumption: 6,
+            bitcoin_avg_block_time: 150.std_seconds(),
+            bitcoin_cancel_timelock: 12 * 3 * 4,
+            bitcoin_punish_timelock: 24 * 3 * 4,
+            bitcoin_remaining_refund_timelock: 2 * 4,
+            bitcoin_network: bitcoin::Network::Testnet,
+            monero_avg_block_time: 2.std_minutes(),
+            monero_lock_retry_timeout: 10.std_minutes(),
+            monero_finality_confirmations: 10,
+            monero_double_spend_safe_confirmations: 10,
+            monero_network: monero_address::Network::Stagenet,
+        }
+    }
+}
+
+impl GetConfig for LitecoinRegtest {
+    fn get_config() -> Config {
+        // Regtest blocks are mined on demand, so the Bitcoin regtest values
+        // work unchanged; only the chain identity differs.
+        Config {
+            chain: Chain::Litecoin,
+            ..Regtest::get_config()
+        }
+    }
+}
+
 fn sync_interval(avg_block_time: Duration) -> Duration {
     max(avg_block_time / 10, Duration::from_secs(1))
 }
 
-pub fn new(is_testnet: bool, asb_config: &AsbConfig) -> Config {
-    let env_config = if is_testnet {
-        Testnet::get_config()
-    } else {
-        Mainnet::get_config()
+/// Build the environment config for the script chain configured in the
+/// ASB config file, applying its finality-confirmation overrides.
+pub fn new(is_testnet: bool, asb_config: &AsbConfig) -> anyhow::Result<Config> {
+    let (chain, script_chain) = asb_config.script_chain()?;
+
+    let env_config = match (chain, is_testnet) {
+        (Chain::Bitcoin, false) => Mainnet::get_config(),
+        (Chain::Bitcoin, true) => Testnet::get_config(),
+        (Chain::Litecoin, false) => LitecoinMainnet::get_config(),
+        (Chain::Litecoin, true) => LitecoinTestnet::get_config(),
     };
 
     let env_config =
-        if let Some(bitcoin_finality_confirmations) = asb_config.bitcoin.finality_confirmations {
+        if let Some(bitcoin_finality_confirmations) = script_chain.finality_confirmations {
             Config {
                 bitcoin_finality_confirmations,
                 ..env_config
@@ -153,14 +229,17 @@ pub fn new(is_testnet: bool, asb_config: &AsbConfig) -> Config {
             env_config
         };
 
-    if let Some(monero_finality_confirmations) = asb_config.monero.finality_confirmations {
-        Config {
-            monero_finality_confirmations,
-            ..env_config
-        }
-    } else {
-        env_config
-    }
+    let env_config =
+        if let Some(monero_finality_confirmations) = asb_config.monero.finality_confirmations {
+            Config {
+                monero_finality_confirmations,
+                ..env_config
+            }
+        } else {
+            env_config
+        };
+
+    Ok(env_config)
 }
 
 #[cfg(test)]
@@ -179,5 +258,62 @@ mod tests {
         let interval = sync_interval(Duration::from_secs(100));
 
         assert_eq!(interval, Duration::from_secs(10))
+    }
+
+    fn wall_clock(blocks: u32, block_time: Duration) -> Duration {
+        block_time * blocks
+    }
+
+    #[test]
+    fn litecoin_environments_keep_bitcoin_wall_clock_timelocks() {
+        for (bitcoin, litecoin) in [
+            (Mainnet::get_config(), LitecoinMainnet::get_config()),
+            (Testnet::get_config(), LitecoinTestnet::get_config()),
+        ] {
+            for (bitcoin_blocks, litecoin_blocks) in [
+                (
+                    bitcoin.bitcoin_cancel_timelock,
+                    litecoin.bitcoin_cancel_timelock,
+                ),
+                (
+                    bitcoin.bitcoin_punish_timelock,
+                    litecoin.bitcoin_punish_timelock,
+                ),
+                (
+                    bitcoin.bitcoin_remaining_refund_timelock,
+                    litecoin.bitcoin_remaining_refund_timelock,
+                ),
+            ] {
+                assert_eq!(
+                    wall_clock(bitcoin_blocks, bitcoin.bitcoin_avg_block_time),
+                    wall_clock(litecoin_blocks, litecoin.bitcoin_avg_block_time),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn litecoin_environment_values() {
+        let config = LitecoinMainnet::get_config();
+
+        assert_eq!(config.chain, Chain::Litecoin);
+        assert_eq!(config.bitcoin_avg_block_time, Duration::from_secs(150));
+        assert_eq!(config.bitcoin_cancel_timelock, 96);
+        assert_eq!(config.bitcoin_punish_timelock, 576);
+        assert_eq!(config.bitcoin_remaining_refund_timelock, 8);
+        assert_eq!(config.bitcoin_finality_confirmations, 2);
+        // The shadow network Litecoin mainnet runs on internally
+        assert_eq!(config.bitcoin_network, bitcoin::Network::Bitcoin);
+        assert_eq!(config.monero_network, monero_address::Network::Mainnet);
+
+        assert_eq!(
+            LitecoinTestnet::get_config().bitcoin_network,
+            bitcoin::Network::Testnet
+        );
+        assert_eq!(
+            LitecoinRegtest::get_config().bitcoin_network,
+            bitcoin::Network::Regtest
+        );
+        assert_eq!(LitecoinRegtest::get_config().chain, Chain::Litecoin);
     }
 }

@@ -316,10 +316,10 @@ fn main() {
 
     // If the config is invalid or doesn't exist, we prompt the user
     if let Some(should_move_old_file) = should_prompt_config_wizard {
-        let min_buy_btc =
-            config_prompt::min_buy_amount().expect("Failed to prompt for min buy amount");
-        let max_buy_btc =
-            config_prompt::max_buy_amount().expect("Failed to prompt for max buy amount");
+        let min_buy_btc = config_prompt::min_buy_amount(swap_chain::Chain::Bitcoin)
+            .expect("Failed to prompt for min buy amount");
+        let max_buy_btc = config_prompt::max_buy_amount(swap_chain::Chain::Bitcoin)
+            .expect("Failed to prompt for max buy amount");
         let ask_spread = config_prompt::ask_spread().expect("Failed to prompt for ask spread");
         let rendezvous_points =
             config_prompt::rendezvous_points().expect("Failed to prompt for rendezvous points");
@@ -348,7 +348,7 @@ fn main() {
                 external_addresses: vec![],
                 prometheus_port: None,
             },
-            bitcoin: Bitcoin {
+            bitcoin: Some(Bitcoin {
                 electrum_rpc_urls: match electrum_server_type {
                     // If user chose the included option, we will use the electrs url from the container
                     prompt::ElectrumServerType::Included => vec![electrs_url],
@@ -359,7 +359,9 @@ fn main() {
                 use_mempool_space_fee_estimation: defaults.use_mempool_space_fee_estimation,
                 // This means that we will use the default set in swap-env/src/env.rs
                 finality_confirmations: None,
-            },
+            }),
+            // The orchestrator only generates Bitcoin deployments for now
+            litecoin: None,
             monero: Monero {
                 daemon_url: match monero_node_type.clone() {
                     prompt::MoneroNodeType::Included => Some(monerod_daemon_url),

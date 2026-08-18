@@ -144,9 +144,9 @@ def check_server(url: str) -> Tuple[str, bool, str]:
 
 def main():
     # Find the files
-    base_dir = Path(__file__).parent
+    base_dir = Path(__file__).parent.parent
     rust_file = base_dir / "swap-env" / "src" / "defaults.rs"
-    ts_file = base_dir / "src-gui" / "src" / "store" / "features" / "defaults.ts"
+    ts_file = base_dir / "src-gui" / "src" / "store" / "defaults.ts"
 
     if not rust_file.exists():
         print(f"❌ Rust defaults file not found: {rust_file}")

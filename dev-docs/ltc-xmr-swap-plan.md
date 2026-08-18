@@ -189,15 +189,31 @@ reuse the existing validity/spread guards.
 
 ### M2 — Env and ASB config
 
-- [ ] `env::Config` constructors for LTC (timelock table above).
-- [ ] `[litecoin]` config section (exactly one of `[bitcoin]`/`[litecoin]`),
-      validation against the derived env config,
-      `min_buy`/`max_buy` in LTC, external redeem address via `ChainAddress`.
-- [ ] Curate + health-check default LTC electrum servers
-      (extend `dev-scripts/health_check_default_electrum_servers.py`).
-- [ ] Prompts/defaults for the interactive setup (chain question first).
-- [ ] ASB startup (`swap-asb/src/main.rs`): wallet init from chain params;
-      data-dir layout `mainnet-ltc/` (or similar) distinct from BTC.
+- [x] `env::Config` constructors for LTC
+      (`LitecoinMainnet`/`LitecoinTestnet`/`LitecoinRegtest`;
+      timelock table above, locked by a wall-clock-parity test).
+- [x] `[litecoin]` config section — `Config.bitcoin`/`.litecoin` are now
+      options with exactly-one enforced by `Config::script_chain()`;
+      `env::new` selects the environment from the configured chain
+      (this also revived the config file's `finality_confirmations`
+      override, which previously had no caller).
+      `min_buy`/`max_buy` stay in the `min_buy_btc`/`max_buy_btc` keys
+      for now (denominating the script chain); renaming is an M4 cleanup.
+- [x] Default LTC electrum server candidates
+      (`electrum-ltc.bysh.me`, `electrum.ltc.xurious.com`,
+      `backup.electrum-ltc.org`; `ltc.rentonrisk.com` dropped — dead DNS).
+      `dev-scripts/health_check_default_electrum_servers.py` had two
+      stale paths and is fixed; the dev sandbox blocks raw TCP, so run
+      the script from an unrestricted machine to verify the candidates.
+- [x] Prompts/defaults for the interactive setup: chain question first,
+      ticker-aware prompts, LTC buy-amount defaults,
+      data/config dirs `mainnet-ltc`/`testnet-ltc`, listen ports 9739/9639.
+- [x] ASB startup (`swap-asb/src/main.rs`): env recomputed from the config
+      file (the chain lives there, not in CLI flags), wallet built with
+      the configured chain.
+- [ ] *(moved to M4)* Chain-aware address validation for the `WithdrawBtc`
+      CLI/RPC path — until then, withdrawing from a Litecoin ASB is
+      unsupported (BTC-shaped address validation would reject `ltc1…`).
 
 ### M3 — P2P layer
 

@@ -114,7 +114,7 @@ pub async fn main() -> Result<()> {
         json,
         trace,
         config_path,
-        env_config,
+        env_config: _,
         cmd,
     } = match parse_args(env::args_os()) {
         Ok(args) => args,
@@ -143,6 +143,11 @@ pub async fn main() -> Result<()> {
 
     // Initialize tracing
     initialize_tracing(json, &config, trace)?;
+
+    // The script chain lives in the config file, so the environment derived
+    // from the CLI flags alone is recomputed here; this also applies the
+    // config file's finality-confirmation overrides.
+    let env_config = swap_env::env::new(testnet, &config)?;
 
     validate_config(&config, env_config)?;
 
@@ -680,12 +685,14 @@ async fn init_bitcoin_wallet(
 ) -> Result<bitcoin_wallet::Wallet> {
     tracing::debug!("Opening Bitcoin wallet");
 
+    let (chain, script_chain) = config.script_chain()?;
+
     let wallet = bitcoin_wallet::WalletBuilder::<Seed>::default()
         .seed(seed.clone())
+        .chain(chain)
         .network(env_config.bitcoin_network)
         .electrum_rpc_urls(
-            config
-                .bitcoin
+            script_chain
                 .electrum_rpc_urls
                 .iter()
                 .map(|url| url.as_str().to_string())
@@ -695,8 +702,8 @@ async fn init_bitcoin_wallet(
             data_dir: config.data.dir.clone(),
         })
         .finality_confirmations(env_config.bitcoin_finality_confirmations)
-        .target_block(config.bitcoin.target_block)
-        .use_mempool_space_fee_estimation(config.bitcoin.use_mempool_space_fee_estimation)
+        .target_block(script_chain.target_block)
+        .use_mempool_space_fee_estimation(script_chain.use_mempool_space_fee_estimation)
         .sync_interval(env_config.bitcoin_sync_interval())
         .build()
         .await

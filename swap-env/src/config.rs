@@ -2,7 +2,7 @@ use crate::defaults::{
     BITFINEX_PRICE_TICKER_WS_URL, EXOLIX_PRICE_TICKER_REST_URL, GetDefaults,
     KRAKEN_PRICE_TICKER_WS_URL, KUCOIN_PRICE_TICKER_REST_URL,
 };
-use crate::env::{Mainnet, Testnet};
+use crate::env::{LitecoinMainnet, LitecoinTestnet, Mainnet, Testnet};
 use crate::prompt;
 use anyhow::{Context, Result, bail};
 use config::ConfigError;
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use swap_chain::Chain;
 use swap_fs::ensure_directory_exists;
 use url::Url;
 
@@ -20,10 +21,34 @@ use url::Url;
 pub struct Config {
     pub data: Data,
     pub network: Network,
-    pub bitcoin: Bitcoin,
+    /// Exactly one of `[bitcoin]` and `[litecoin]` must be present:
+    /// each ASB process serves a single script chain.
+    /// Access the active section through [`Config::script_chain`].
+    #[serde(default)]
+    pub bitcoin: Option<Bitcoin>,
+    #[serde(default)]
+    pub litecoin: Option<Bitcoin>,
     pub monero: Monero,
     pub tor: TorConf,
     pub maker: Maker,
+}
+
+impl Config {
+    /// The script-chain section of this config.
+    ///
+    /// Errors when both or neither of `[bitcoin]` and `[litecoin]`
+    /// are present.
+    pub fn script_chain(&self) -> Result<(Chain, &Bitcoin)> {
+        match (&self.bitcoin, &self.litecoin) {
+            (Some(bitcoin), None) => Ok((Chain::Bitcoin, bitcoin)),
+            (None, Some(litecoin)) => Ok((Chain::Litecoin, litecoin)),
+            (Some(_), Some(_)) => bail!(
+                "config must not contain both a [bitcoin] and a [litecoin] section; \
+                 each ASB process serves a single script chain"
+            ),
+            (None, None) => bail!("config must contain either a [bitcoin] or a [litecoin] section"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -53,6 +78,10 @@ pub struct Network {
     pub prometheus_port: Option<u16>,
 }
 
+/// The script-chain section of the config file.
+///
+/// The same shape backs both the `[bitcoin]` and the `[litecoin]` section;
+/// `network` always holds the internal (rust-bitcoin) network representation.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bitcoin {
@@ -350,6 +379,8 @@ pub const MIN_BTC_REDEEM_FEE_MULTIPLIER: Decimal = Decimal::from_parts(1, 0, 0, 
 pub const MAX_BTC_REDEEM_FEE_MULTIPLIER: Decimal = Decimal::from_parts(10, 0, 0, false, 0); // 10
 
 pub fn validate_config(config: &Config, env_config: crate::env::Config) -> Result<()> {
+    let (chain, script_chain) = config.script_chain()?;
+
     if config.monero.network != env_config.monero_network {
         bail!(
             "Expected monero network in config file to be {:?} but was {:?}",
@@ -357,11 +388,19 @@ pub fn validate_config(config: &Config, env_config: crate::env::Config) -> Resul
             config.monero.network
         );
     }
-    if config.bitcoin.network != env_config.bitcoin_network {
+    if chain != env_config.chain {
         bail!(
-            "Expected bitcoin network in config file to be {:?} but was {:?}",
+            "Expected the config file to configure the {} chain but it configures {}",
+            env_config.chain,
+            chain
+        );
+    }
+    if script_chain.network != env_config.bitcoin_network {
+        bail!(
+            "Expected {} network in config file to be {:?} but was {:?}",
+            chain,
             env_config.bitcoin_network,
-            config.bitcoin.network
+            script_chain.network
         );
     }
 
@@ -410,28 +449,48 @@ pub fn initial_setup(config_path: PathBuf, config: Config) -> Result<()> {
 }
 
 pub fn query_user_for_initial_config_with_network(
+    chain: Chain,
     bitcoin_network: bitcoin::Network,
     monero_network: monero_address::Network,
 ) -> Result<Config> {
-    let defaults = match bitcoin_network {
-        bitcoin::Network::Bitcoin => Mainnet::get_config_file_defaults()?,
-        bitcoin::Network::Testnet => Testnet::get_config_file_defaults()?,
-        _ => bail!("Unsupported bitcoin network"),
+    let defaults = match (chain, bitcoin_network) {
+        (Chain::Bitcoin, bitcoin::Network::Bitcoin) => Mainnet::get_config_file_defaults()?,
+        (Chain::Bitcoin, bitcoin::Network::Testnet) => Testnet::get_config_file_defaults()?,
+        (Chain::Litecoin, bitcoin::Network::Bitcoin) => {
+            LitecoinMainnet::get_config_file_defaults()?
+        }
+        (Chain::Litecoin, bitcoin::Network::Testnet) => {
+            LitecoinTestnet::get_config_file_defaults()?
+        }
+        _ => bail!("Unsupported {chain} network"),
     };
 
     let data_dir = prompt::data_directory(&defaults.data_dir)?;
-    let target_block = prompt::bitcoin_confirmation_target(defaults.bitcoin_confirmation_target)?;
+    let target_block =
+        prompt::bitcoin_confirmation_target(chain, defaults.bitcoin_confirmation_target)?;
     let listen_addresses = prompt::listen_addresses(&defaults.listen_address_tcp)?;
     let electrum_rpc_urls = prompt::electrum_rpc_urls(&defaults.electrum_rpc_urls)?;
     let monero_daemon_url = prompt::monero_daemon_url()?;
     let register_hidden_service = prompt::tor_hidden_service()?;
-    let min_buy = prompt::min_buy_amount()?;
-    let max_buy = prompt::max_buy_amount()?;
+    let min_buy = prompt::min_buy_amount(chain)?;
+    let max_buy = prompt::max_buy_amount(chain)?;
     let ask_spread = prompt::ask_spread()?;
     let rendezvous_points = prompt::rendezvous_points()?;
     let developer_tip = prompt::developer_tip()?;
 
     println!();
+
+    let script_chain_section = Bitcoin {
+        electrum_rpc_urls,
+        target_block,
+        finality_confirmations: None,
+        network: bitcoin_network,
+        use_mempool_space_fee_estimation: true,
+    };
+    let (bitcoin, litecoin) = match chain {
+        Chain::Bitcoin => (Some(script_chain_section), None),
+        Chain::Litecoin => (None, Some(script_chain_section)),
+    };
 
     Ok(Config {
         data: Data { dir: data_dir },
@@ -441,13 +500,8 @@ pub fn query_user_for_initial_config_with_network(
             external_addresses: vec![],
             prometheus_port: None,
         },
-        bitcoin: Bitcoin {
-            electrum_rpc_urls,
-            target_block,
-            finality_confirmations: None,
-            network: bitcoin_network,
-            use_mempool_space_fee_estimation: true,
-        },
+        bitcoin,
+        litecoin,
         monero: Monero {
             daemon_url: monero_daemon_url,
             finality_confirmations: None,
@@ -484,6 +538,8 @@ pub fn query_user_for_initial_config_with_network(
 }
 
 pub fn query_user_for_initial_config(testnet: bool) -> Result<Config> {
+    let chain = prompt::script_chain()?;
+
     let (bitcoin_network, monero_network) = if testnet {
         let bitcoin_network = bitcoin::Network::Testnet;
         let monero_network = monero_address::Network::Stagenet;
@@ -494,5 +550,119 @@ pub fn query_user_for_initial_config(testnet: bool) -> Result<Config> {
         (bitcoin_network, monero_network)
     };
 
-    query_user_for_initial_config_with_network(bitcoin_network, monero_network)
+    query_user_for_initial_config_with_network(chain, bitcoin_network, monero_network)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE_CONFIG: &str = r#"
+        [data]
+        dir = "/tmp/asb-data"
+
+        [network]
+        listen = ["/ip4/0.0.0.0/tcp/9939"]
+
+        [monero]
+        network = "Mainnet"
+
+        [tor]
+        register_hidden_service = false
+        hidden_service_num_intro_points = 5
+
+        [maker]
+        min_buy_btc = 0.002
+        max_buy_btc = 0.02
+        ask_spread = 0.02
+    "#;
+
+    const BITCOIN_SECTION: &str = r#"
+        [bitcoin]
+        electrum_rpc_urls = ["ssl://electrum.blockstream.info:50002"]
+        target_block = 1
+        network = "Mainnet"
+    "#;
+
+    const LITECOIN_SECTION: &str = r#"
+        [litecoin]
+        electrum_rpc_urls = ["ssl://electrum-ltc.bysh.me:50002"]
+        target_block = 1
+        network = "Mainnet"
+    "#;
+
+    fn parse(toml: &str) -> Config {
+        toml::from_str(toml).expect("config fixture to parse")
+    }
+
+    #[test]
+    fn bitcoin_only_config_is_the_bitcoin_chain() {
+        let config = parse(&format!("{BASE_CONFIG}{BITCOIN_SECTION}"));
+
+        let (chain, script_chain) = config.script_chain().unwrap();
+        assert_eq!(chain, Chain::Bitcoin);
+        assert_eq!(script_chain.network, bitcoin::Network::Bitcoin);
+    }
+
+    #[test]
+    fn litecoin_only_config_is_the_litecoin_chain() {
+        let config = parse(&format!("{BASE_CONFIG}{LITECOIN_SECTION}"));
+
+        let (chain, script_chain) = config.script_chain().unwrap();
+        assert_eq!(chain, Chain::Litecoin);
+        assert_eq!(script_chain.network, bitcoin::Network::Bitcoin);
+    }
+
+    #[test]
+    fn both_or_neither_chain_section_is_rejected() {
+        let both = parse(&format!("{BASE_CONFIG}{BITCOIN_SECTION}{LITECOIN_SECTION}"));
+        assert!(both.script_chain().is_err());
+
+        let neither = parse(BASE_CONFIG);
+        assert!(neither.script_chain().is_err());
+    }
+
+    #[test]
+    fn env_new_picks_the_environment_for_the_configured_chain() {
+        let bitcoin_config = parse(&format!("{BASE_CONFIG}{BITCOIN_SECTION}"));
+        let litecoin_config = parse(&format!("{BASE_CONFIG}{LITECOIN_SECTION}"));
+
+        let bitcoin_env = crate::env::new(false, &bitcoin_config).unwrap();
+        assert_eq!(bitcoin_env.chain, Chain::Bitcoin);
+        assert_eq!(bitcoin_env.bitcoin_cancel_timelock, 24);
+
+        let litecoin_env = crate::env::new(false, &litecoin_config).unwrap();
+        assert_eq!(litecoin_env.chain, Chain::Litecoin);
+        assert_eq!(litecoin_env.bitcoin_cancel_timelock, 96);
+
+        validate_config(&litecoin_config, litecoin_env).unwrap();
+        assert!(validate_config(&litecoin_config, bitcoin_env).is_err());
+    }
+
+    #[test]
+    fn finality_confirmations_override_applies() {
+        let with_override = format!(
+            "{BASE_CONFIG}{}",
+            LITECOIN_SECTION.replace(
+                "target_block = 1",
+                "target_block = 1\n        finality_confirmations = 7"
+            )
+        );
+        let config = parse(&with_override);
+
+        let env = crate::env::new(false, &config).unwrap();
+        assert_eq!(env.bitcoin_finality_confirmations, 7);
+    }
+
+    #[test]
+    fn litecoin_config_serializes_without_a_bitcoin_section() {
+        let config = parse(&format!("{BASE_CONFIG}{LITECOIN_SECTION}"));
+
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(serialized.contains("[litecoin]"));
+        assert!(!serialized.contains("[bitcoin]"));
+
+        let round_tripped: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(round_tripped, config);
+    }
 }
