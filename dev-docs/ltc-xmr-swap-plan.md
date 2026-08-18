@@ -1,0 +1,275 @@
+# Plan: LTC→XMR atomic swaps (ASB-first)
+
+Working document for adding a Litecoin→Monero swap pair
+alongside the existing Bitcoin→Monero pair.
+Direction: the taker (Bob) locks LTC and receives XMR;
+the ASB (Alice) sells XMR and receives LTC —
+the exact mirror of today's BTC→XMR flow,
+which is the natural direction of the protocol
+(the "script chain" is always locked by Bob,
+Monero is always locked by Alice).
+
+Scope: ASB / backend first.
+No GUI work in this phase,
+but every Rust crate (including `src-tauri`) must keep compiling.
+Per `AI_POLICY.md`, changes are piloted by a human;
+this document is the map, not an autopilot.
+
+## 1. Why this is feasible
+
+The cryptographic core of the protocol is chain-agnostic.
+Everything the swap needs from the script chain exists identically on Litecoin:
+
+- P2WSH (segwit v0, active on LTC since 2017) and the shared-output miniscript
+  `c:and_v(v:pk(A),pk_k(B))` (`swap-core/src/bitcoin.rs:222`).
+- Relative timelocks via BIP68 `nSequence` (TxCancel, TxPunish, TxReclaim).
+- ECDSA on secp256k1 with `SIGHASH_ALL`,
+  including the adaptor-signature (encsig) construction from `ecdsa_fun`.
+- Transaction, script, sighash and PSBT (BIP174) serialization are byte-identical;
+  PSBTs carry scripts, not addresses, so `Message2.tx_lock_psbt` is chain-neutral.
+- 8 decimal places (1 LTC = 10^8 litoshi),
+  so `bitcoin::Amount` remains numerically valid.
+
+What actually differs:
+
+| Aspect | Bitcoin | Litecoin |
+| --- | --- | --- |
+| bech32 HRP | `bc` / `tb` / `bcrt` | `ltc` / `tltc` / `rltc` |
+| base58 prefixes | `1`/`3`, `m,n`/`2` | `L`/`M`, `m,n`/`Q` (unused: bech32-only policy) |
+| SLIP-44 coin type | 0 (testnet 1) | 2 (testnet 1) |
+| Avg block time | 10 min | 2.5 min (all timelocks ×4 for wall-clock parity) |
+| Fee API | mempool.space | litecoinspace.org (same mempool.space codebase/API — to verify) |
+| Electrum servers | curated list exists | new list to curate (ElectrumX-LTC / Fulcrum ecosystem) |
+| Hashrate/finality | finality_confirmations = 1 | lower hashrate; propose 2 (decision) |
+| MWEB | n/a | exists, deliberately unsupported (bech32 v0 only) |
+
+## 2. Bitcoin-specific inventory (from codebase analysis)
+
+The workspace is already well modularized;
+the port cost is concentrated in known places:
+
+- **`swap-env/src/env.rs:8-28`** —
+  9 `bitcoin_*` fields (network, avg block time, 3 timelocks, finality, timeouts)
+  selected per `Mainnet/Testnet/Regtest`.
+- **`swap-env/src/config.rs`** —
+  singular `[bitcoin]` section (`:58-71`),
+  `min_buy_btc`/`max_buy_btc` (`:147-150`),
+  `external_bitcoin_redeem_address` (`:186`),
+  defaults and prompts (`defaults.rs:60-101`, `prompt.rs`).
+- **`bitcoin-wallet`** —
+  BIP84 templates (coin type 0/1) at `wallet.rs:531,642`;
+  mempool.space hardcoded (`wallet.rs:2659,2686-2692`);
+  address validation restricted to P2WPKH with Bitcoin HRPs (`core.rs:68-146`);
+  `is_testnet: bool` shortcuts (4 sites in `core.rs`);
+  dust/fee constants (`wallet.rs:83-88`);
+  wallet dir names not chain-scoped (`wallet.rs:374-376`).
+- **`swap-p2p`** — 8 protocol ids under `/comit/xmr/btc/...`
+  (quote, swap_setup, transfer_proof, encrypted_signature,
+  cooperative_xmr_redeem_after_punish, wormhole, identify ×2),
+  rendezvous namespaces `xmr-btc-swap-{mainnet,testnet}` (`rendezvous.rs:11-13`),
+  `BlockchainNetwork { bitcoin, monero }` (`swap_setup.rs:36-42`).
+- **`swap-feed`** — pair strings hardcoded per provider:
+  Kraken `XMR/XBT`, Bitfinex `tXMRBTC`, KuCoin `XMR-BTC`, Exolix `BTC→XMR`.
+  Aggregation (`ExchangeRate`, validity, 10% inter-exchange guard) is reusable as-is.
+- **`swap-db` / `swap/migrations`** —
+  no chain column anywhere;
+  states serialized as JSON with `bitcoin::Address` strings;
+  serde backcompat is fragile
+  (`RefundSignatures` is `#[serde(untagged)]` + flattened — never rename).
+- **`swap/src/asb/event_loop.rs`** —
+  `capture_wallet_snapshot` (9 fee estimates), `make_quote`, anti-spam policy:
+  all `bitcoin::Amount`-typed but chain-neutral in logic.
+- Already-good seams:
+  `EventLoop` holds `Arc<dyn BitcoinWallet>` (trait at `bitcoin-wallet/src/lib.rs:15`),
+  `swap-machine` is pure,
+  `monero-wallet` has zero bitcoin coupling
+  (only `swap-core/src/monero/{primitives,ext}.rs` need touching).
+
+## 3. Strategy
+
+**S1 — Runtime `Chain` parameter, not type-level generics.**
+Introduce `Chain { Bitcoin, Litecoin }` plus a `ChainParams` descriptor
+(HRPs, SLIP-44 coin type, avg block time, timelock defaults,
+dust/min-relay constants, fee API base URL, electrum defaults, explorer URL).
+Keep all rust-bitcoin consensus types
+(`Transaction`, `ScriptBuf`, `Psbt`, `Amount`, `Txid`) —
+they are byte-compatible with Litecoin.
+Internally the BDK wallet runs on the corresponding
+`bitcoin::Network::{Bitcoin,Testnet,Regtest}` ("shadow network").
+
+**S2 — Chain-aware address type, discriminated by HRP.**
+A `ChainAddress` (wrapping witness program + chain + network)
+that parses `bc1…`/`ltc1…` by HRP and displays the correct form.
+Backward compatible with existing DB blobs and wire strings
+(`bc1…` parses as Bitcoin).
+Only bech32 v0 accepted (P2WPKH user addresses, P2WSH internal),
+matching the existing policy;
+MWEB addresses (`ltcmweb1…`) are naturally rejected.
+
+**S3 — One pair per ASB process (phase 1).**
+The config selects the script chain
+(`[bitcoin]` or `[litecoin]` section, exactly one).
+EventLoop, swap runners and DB stay single-pair per process;
+running BTC and LTC side by side = two processes with separate data dirs.
+Multi-pair in one process is a later milestone
+(needs shared XMR reserve accounting).
+
+**S4 — New protocol id family, full backward compatibility.**
+`/comit/xmr/ltc/{swap_setup,bid-quote,transfer_proof,encrypted_signature,cooperative_xmr_redeem_after_punish}/…`
+and rendezvous namespaces `xmr-ltc-swap-{mainnet,testnet}`.
+BTC peers never negotiate with LTC endpoints;
+old clients fail cleanly at protocol negotiation.
+Wormhole stays shared (transport-level, chain-agnostic).
+
+**S5 — XMR/LTC rate via cross-rate.**
+No liquid direct XMR/LTC pair on the big exchanges;
+compose XMR/LTC = (XMR/BTC ask) ÷ (LTC/BTC bid) per provider
+(Kraken, Bitfinex, KuCoin subscribe both legs; Exolix quotes LTC→XMR directly).
+Both legs must be fresh for the sample to count;
+reuse the existing validity/spread guards.
+
+**S6 — Timelocks at wall-clock parity (×4).**
+
+| Constant | BTC mainnet | LTC mainnet (proposed) | Wall clock |
+| --- | --- | --- | --- |
+| cancel_timelock | 24 | 96 | ~4 h |
+| punish_timelock | 144 | 576 | ~24 h |
+| remaining_refund_timelock | 2 | 8 | ~20 min |
+| finality_confirmations | 1 | 2 (decision) | ~5 min |
+| avg_block_time | 10 min | 2.5 min | — |
+| lock_confirmed_timeout | 2 h | 1 h | ~24 blocks |
+
+## 4. Milestones and tasks
+
+### M0 — Preparation (pure refactors, zero behavior change)
+
+- [ ] Rename `env::Config`'s `bitcoin_*` fields to chain-neutral names
+      (`script_chain_network`, `cancel_timelock`, …) across all use sites,
+      or add a `chain: Chain` field — compiler-driven, no logic change.
+- [ ] Introduce `Chain` + `ChainParams` in a low-level crate
+      (`swap-core` or a new tiny `chain-params` module in `bitcoin-wallet`).
+- [ ] Replace the four `is_testnet: bool` address shortcuts
+      (`bitcoin-wallet/src/core.rs`) with explicit `(Chain, Network)` inputs.
+- [ ] Neutralize `AmountExt::max_bitcoin_for_price`
+      (`swap-core/src/monero/primitives.rs:100-147`) naming/typing.
+- [ ] Gate: `cargo c --all-features --all-targets`, unit tests green,
+      one BTC docker happy-path run to prove zero regression.
+
+### M1 — Litecoin chain layer
+
+- [ ] `ChainParams::LITECOIN_{MAINNET,TESTNET,REGTEST}`:
+      HRPs, coin type 2', avg block time, dust/min-relay
+      (verify against litecoind 0.21+ defaults: minrelay 0.00001 LTC/kvB),
+      fee API base URL, explorer URL.
+- [ ] `ChainAddress` codec (parse/display by HRP, bech32 v0 only) + serde
+      (`swap-serde`), round-trip and rejection tests
+      (BTC addr on LTC swap, MWEB, base58).
+- [ ] `bitcoin-wallet`: thread `ChainParams` through `WalletBuilder`/`WalletConfig`;
+      descriptor `m/84'/2'/0'` for LTC mainnet (`m/84'/1'/0'` testnet);
+      chain-scoped wallet directory (avoid collision in a shared data dir);
+      skip legacy pre-BDK-1.0 migration for LTC;
+      fee estimation: electrum `estimatefee` (unchanged) +
+      litecoinspace.org `/api/v1/fees/recommended` behind the params base URL.
+- [ ] **Early spike (de-risk):** create an LTC regtest wallet against
+      litecoind + an LTC electrum server;
+      verify BDK sync/broadcast with the shadow network
+      (genesis-hash anchor behavior), fund, send, `max_giveable`.
+- [ ] Unit tests for the codec and params.
+
+### M2 — Env and ASB config
+
+- [ ] `env::Config` constructors for LTC (timelock table above).
+- [ ] `[litecoin]` config section (exactly one of `[bitcoin]`/`[litecoin]`),
+      validation against the derived env config,
+      `min_buy`/`max_buy` in LTC, external redeem address via `ChainAddress`.
+- [ ] Curate + health-check default LTC electrum servers
+      (extend `dev-scripts/health_check_default_electrum_servers.py`).
+- [ ] Prompts/defaults for the interactive setup (chain question first).
+- [ ] ASB startup (`swap-asb/src/main.rs`): wallet init from chain params;
+      data-dir layout `mainnet-ltc/` (or similar) distinct from BTC.
+
+### M3 — P2P layer
+
+- [ ] Parameterize protocol id constants by chain;
+      add the `/comit/xmr/ltc/...` family (see S4)
+      and `XmrBtcNamespace` → chain-aware namespaces.
+- [ ] Identify protocol version / agent string per chain.
+- [ ] `BlockchainNetwork` for the LTC protocol
+      (script-chain network + monero network; new ids make this free).
+- [ ] `list_sellers` / rendezvous registration under the LTC namespace.
+- [ ] Negotiation tests: BTC client × LTC ASB must fail cleanly at negotiation.
+
+### M4 — ASB event loop, feed, DB
+
+- [ ] `swap-feed`: cross-rate legs per provider
+      (parse the bid side for LTC/BTC), Exolix direct pair;
+      freshness = both legs fresh; keep 10% inter-exchange guard;
+      `FixedRate` equivalent for tests.
+- [ ] Event loop: quotes, wallet snapshot (9 fee estimates), anti-spam policy —
+      logic unchanged, amounts now denominate LTC;
+      min/max enforcement in `swap_setup/alice.rs` unchanged.
+- [ ] DB migration: `ALTER TABLE swap_states ADD COLUMN chain TEXT NOT NULL DEFAULT 'bitcoin'`;
+      tag inserts with the process chain;
+      refuse resuming a swap whose chain ≠ process chain (clear error).
+- [ ] Swap runner (`protocol::alice::run` / `bob::run`):
+      should need no logic change — verify timelock/fee paths use env config only.
+- [ ] Controller/RPC + tauri layer: keep compiling
+      (single-pair process keeps existing endpoints; naming cleanup later).
+
+### M5 — Integration tests (docker)
+
+- [ ] Research + pin images: litecoind (e.g. `uphold/litecoin-core`)
+      and an LTC-capable electrum server
+      (Fulcrum recommended; `vulpemventures/electrs` is BTC-only).
+- [ ] Harness: parameterize `swap/tests/harness` by chain
+      (containers, HRP, fallbackfee flag, generate-blocks).
+- [ ] Tests: `happy_path_ltc`, refund path, punish path, early-refund path
+      (start with these four; extend to the amnesty family after).
+- [ ] `justfile` targets + CI matrix entries.
+- [ ] Gate (AI_POLICY): full LTC docker suite green + BTC suite unchanged.
+
+### M6 — Ops and finish
+
+- [ ] `swap-orchestrator`: litecoind/electrum container definitions + compose.
+- [ ] Docs: ASB README section, changelog entry.
+- [ ] Real-world dry run on LTC testnet (testnet4) end to end.
+
+### M7 — Later (out of scope for now)
+
+- Multi-pair in a single ASB process (shared XMR reserve accounting).
+- GUI (address display, explorer links `litecoinspace.org/tx/…`, pair selector).
+- Upstream discussion (protocol ids are a network-wide convention).
+
+## 5. Open decisions (recommendation first)
+
+1. **Process model:** one pair per ASB process (recommended) vs multi-pair.
+2. **Address handling:** HRP-discriminated `ChainAddress` (recommended)
+   vs internal shadow encoding re-encoded at edges.
+3. **LTC finality confirmations:** 2 (recommended, lower hashrate) vs 1 (BTC parity).
+4. **Rate source:** cross-rate via BTC legs (recommended, liquid)
+   vs direct XMR/LTC pairs only (thin markets).
+5. **Timelock values:** validate the ×4 wall-clock-parity table above.
+6. **Amounts:** reuse `bitcoin::Amount` for litoshi (recommended; display-level naming only).
+
+## 6. Risks
+
+- **BDK shadow-network genesis anchor** —
+  local chain starts from the BTC genesis hash while the electrum server serves LTC;
+  believed safe (anchors attach at tx heights), must be proven by the M1 spike first.
+- **Serde backcompat of persisted states** —
+  enum variant names are DB tags; `RefundSignatures` is untagged+flattened;
+  no renames of serialized shapes, ever.
+- **LTC electrum server ecosystem** —
+  fewer/less reliable public servers; quorum (`min_parallel_responses: 2`)
+  may need per-chain tuning.
+- **CI images** — litecoind/Fulcrum images must be pinned by digest;
+  regtest segwit activation must be verified.
+- **Cross-rate correctness** — use the bid leg for LTC/BTC
+  (maker-favorable), and require both legs fresh.
+
+## 7. Validation checklist (every milestone)
+
+- `cargo c --all-features`, `cargo c --tests`, `cargo c --all-targets`.
+- Unit tests of touched crates; `cargo fmt` + clippy clean.
+- Affected docker tests (liberal interpretation), BTC suite as regression guard.
+- Atomic commits, changelog entry for user-visible changes (CONTRIBUTING.md).
