@@ -13,6 +13,10 @@
 //! corresponding `bitcoin::Network` internally ("shadow network") and only
 //! differs at the boundaries described by [`ChainParams`].
 
+pub mod address;
+
+pub use address::{ChainAddress, ChainAddressError};
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
