@@ -10710,6 +10710,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "swap-chain"
+version = "0.1.0"
+dependencies = [
+ "bitcoin 0.32.8",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "swap-controller"
 version = "4.13.3"
 dependencies = [
@@ -10801,6 +10811,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "sha2",
+ "swap-chain",
  "swap-fs",
  "swap-serde",
  "thiserror 1.0.69",
