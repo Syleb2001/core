@@ -17,6 +17,7 @@ rand = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
+swap-chain = { path = "../swap-chain" }
 swap-fs = { path = "../swap-fs" }
 swap-serde = { path = "../swap-serde" }
 thiserror = { workspace = true }

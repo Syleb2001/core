@@ -2,10 +2,18 @@ use crate::config::Config as AsbConfig;
 use serde::Serialize;
 use std::cmp::max;
 use std::time::Duration;
+use swap_chain::Chain;
 use time::ext::NumericalStdDuration;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
 pub struct Config {
+    /// The script chain this environment describes.
+    ///
+    /// The `bitcoin_*` fields below are named after the original
+    /// Bitcoin-only protocol; for another script chain they carry that
+    /// chain's values, with `bitcoin_network` holding the internal
+    /// (rust-bitcoin) "shadow network" representation.
+    pub chain: Chain,
     pub bitcoin_lock_mempool_timeout: Duration,
     pub bitcoin_lock_confirmed_timeout: Duration,
     pub bitcoin_finality_confirmations: u32,
@@ -28,6 +36,10 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn chain_params(&self) -> &'static swap_chain::ChainParams {
+        self.chain.params()
+    }
+
     pub fn bitcoin_sync_interval(&self) -> Duration {
         sync_interval(self.bitcoin_avg_block_time)
     }
@@ -53,6 +65,7 @@ pub struct Regtest;
 impl GetConfig for Mainnet {
     fn get_config() -> Config {
         Config {
+            chain: Chain::Bitcoin,
             bitcoin_lock_mempool_timeout: 10.std_minutes(),
             bitcoin_lock_confirmed_timeout: 2.std_hours(),
             bitcoin_finality_confirmations: 1,
@@ -78,6 +91,7 @@ impl GetConfig for Mainnet {
 impl GetConfig for Testnet {
     fn get_config() -> Config {
         Config {
+            chain: Chain::Bitcoin,
             bitcoin_lock_mempool_timeout: 10.std_minutes(),
             bitcoin_lock_confirmed_timeout: 1.std_hours(),
             bitcoin_finality_confirmations: 1,
@@ -99,6 +113,7 @@ impl GetConfig for Testnet {
 impl GetConfig for Regtest {
     fn get_config() -> Config {
         Config {
+            chain: Chain::Bitcoin,
             bitcoin_lock_mempool_timeout: 30.std_seconds(),
             bitcoin_lock_confirmed_timeout: 5.std_minutes(),
             bitcoin_finality_confirmations: 1,

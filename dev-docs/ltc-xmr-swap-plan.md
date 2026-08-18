@@ -143,17 +143,25 @@ reuse the existing validity/spread guards.
 
 ### M0 — Preparation (pure refactors, zero behavior change)
 
-- [ ] Rename `env::Config`'s `bitcoin_*` fields to chain-neutral names
-      (`script_chain_network`, `cancel_timelock`, …) across all use sites,
-      or add a `chain: Chain` field — compiler-driven, no logic change.
-- [ ] Introduce `Chain` + `ChainParams` in a low-level crate
-      (`swap-core` or a new tiny `chain-params` module in `bitcoin-wallet`).
-- [ ] Replace the four `is_testnet: bool` address shortcuts
-      (`bitcoin-wallet/src/core.rs`) with explicit `(Chain, Network)` inputs.
-- [ ] Neutralize `AmountExt::max_bitcoin_for_price`
-      (`swap-core/src/monero/primitives.rs:100-147`) naming/typing.
+- [x] Introduce `Chain` + `ChainParams` in a new bottom-of-graph crate
+      (`swap-chain`: identity, tickers, HRPs, SLIP-44 coin type,
+      fee/explorer endpoints — consensus timing stays in `swap-env`).
+- [x] Tag `env::Config` with its script chain (`chain: Chain` field
+      + `chain_params()` accessor).
+      Chosen over mass-renaming the `bitcoin_*` fields:
+      this fork tracks upstream,
+      and a rename would conflict with every upstream change
+      touching those ~100 use sites.
+      The fields are documented as "script chain" values instead.
+- [ ] *(moved to M1)* Replace the `is_testnet: bool` address shortcuts
+      (`bitcoin-wallet/src/core.rs`) together with the `ChainAddress` codec.
+- [ ] *(moved to M4)* Neutralize `AmountExt::max_bitcoin_for_price`
+      (`swap-core/src/monero/primitives.rs:100-147`)
+      when the rate plumbing is touched anyway.
 - [ ] Gate: `cargo c --all-features --all-targets`, unit tests green,
-      one BTC docker happy-path run to prove zero regression.
+      one BTC docker happy-path run to prove zero regression
+      (docker is unavailable in this dev environment —
+      the happy-path run is on the pilot's machine).
 
 ### M1 — Litecoin chain layer
 

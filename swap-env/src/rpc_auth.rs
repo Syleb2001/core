@@ -90,7 +90,10 @@ pub fn validate_password_strength(password: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    Err(format!("Password is too weak; it must have {}", missing.join(", ")))
+    Err(format!(
+        "Password is too weak; it must have {}",
+        missing.join(", ")
+    ))
 }
 
 #[cfg(test)]
