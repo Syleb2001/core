@@ -14,7 +14,6 @@ use libp2p::swarm::handler::ConnectionEvent;
 use libp2p::swarm::{ConnectionHandler, ConnectionId};
 use libp2p::swarm::{ConnectionHandlerEvent, NetworkBehaviour, SubstreamProtocol, ToSwarm};
 use libp2p::{Multiaddr, PeerId};
-use tracing::Instrument;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::task::Poll;
@@ -24,6 +23,7 @@ use swap_env::env;
 use swap_feed::LatestRate;
 use swap_machine::alice::{State0, State3};
 use swap_machine::common::{Message0, Message2, Message4};
+use tracing::Instrument;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -309,7 +309,7 @@ where
     type OutboundOpenInfo = ();
 
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol, Self::InboundOpenInfo> {
-        SubstreamProtocol::new(protocol::new(), ())
+        SubstreamProtocol::new(protocol::new(self.env_config.chain), ())
     }
 
     fn on_connection_event(

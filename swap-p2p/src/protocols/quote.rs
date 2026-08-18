@@ -4,11 +4,20 @@ use libp2p::request_response::{self, ProtocolSupport};
 use libp2p::{PeerId, StreamProtocol};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use swap_chain::Chain;
 use swap_core::bitcoin;
 use swap_env::config::RefundPolicy;
 use typeshare::typeshare;
 
 pub(crate) const PROTOCOL: &str = "/comit/xmr/btc/bid-quote/2.0.0";
+pub(crate) const PROTOCOL_LTC: &str = "/comit/xmr/ltc/bid-quote/2.0.0";
+
+pub fn protocol(chain: Chain) -> &'static str {
+    match chain {
+        Chain::Bitcoin => PROTOCOL,
+        Chain::Litecoin => PROTOCOL_LTC,
+    }
+}
 pub type OutEvent = request_response::Event<(), BidQuote>;
 pub type Message = request_response::Message<(), BidQuote>;
 
@@ -41,15 +50,6 @@ impl From<RefundPolicy> for RefundPolicyWire {
                 anti_spam_deposit_ratio: policy.anti_spam_deposit_ratio,
             }
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BidQuoteProtocol;
-
-impl AsRef<str> for BidQuoteProtocol {
-    fn as_ref(&self) -> &str {
-        PROTOCOL
     }
 }
 
@@ -106,14 +106,17 @@ pub struct ReserveProofWithAddress {
 ///
 /// The ASB is always listening and only supports inbound connections, i.e.
 /// handing out quotes.
-pub fn alice(metrics: Option<RequestResponseMetrics>) -> Behaviour {
+pub fn alice(chain: Chain, metrics: Option<RequestResponseMetrics>) -> Behaviour {
     Metered::new(
         request_response::json::Behaviour::new(
-            vec![(StreamProtocol::new(PROTOCOL), ProtocolSupport::Inbound)],
+            vec![(
+                StreamProtocol::new(protocol(chain)),
+                ProtocolSupport::Inbound,
+            )],
             request_response::Config::default()
                 .with_request_timeout(crate::defaults::QUOTE_REQUEST_TIMEOUT),
         ),
-        PROTOCOL,
+        protocol(chain),
         metrics,
     )
 }
@@ -122,14 +125,17 @@ pub fn alice(metrics: Option<RequestResponseMetrics>) -> Behaviour {
 ///
 /// The CLI is always dialing and only supports outbound connections, i.e.
 /// requesting quotes.
-pub fn bob() -> Behaviour {
+pub fn bob(chain: Chain) -> Behaviour {
     Metered::new(
         request_response::json::Behaviour::new(
-            vec![(StreamProtocol::new(PROTOCOL), ProtocolSupport::Outbound)],
+            vec![(
+                StreamProtocol::new(protocol(chain)),
+                ProtocolSupport::Outbound,
+            )],
             request_response::Config::default()
                 .with_request_timeout(crate::defaults::QUOTE_REQUEST_TIMEOUT),
         ),
-        PROTOCOL,
+        protocol(chain),
         None,
     )
 }

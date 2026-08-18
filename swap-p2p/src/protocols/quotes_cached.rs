@@ -36,9 +36,9 @@ pub struct Behaviour {
 }
 
 impl Behaviour {
-    pub fn new(identify_config: identify::Config) -> Self {
+    pub fn new(chain: swap_chain::Chain, identify_config: identify::Config) -> Self {
         Self {
-            inner: quotes::Behaviour::new(identify_config),
+            inner: quotes::Behaviour::new(chain, identify_config),
             address_tracker: AddressTracker::new(),
             versions: HashMap::new(),
             cache: HashMap::new(),

@@ -1,23 +1,23 @@
 use libp2p::request_response::{self, ProtocolSupport};
 use libp2p::{PeerId, StreamProtocol};
 use serde::{Deserialize, Serialize};
+use swap_chain::Chain;
 use uuid::Uuid;
 
 use crate::out_event;
 use crate::protocols::metered::{Metered, RequestResponseMetrics};
 
 const PROTOCOL: &str = "/comit/xmr/btc/transfer_proof/1.0.0";
+const PROTOCOL_LTC: &str = "/comit/xmr/ltc/transfer_proof/1.0.0";
 type OutEvent = request_response::Event<Request, ()>;
 type Message = request_response::Message<Request, ()>;
 
 pub type Behaviour = Metered<request_response::cbor::Behaviour<Request, ()>>;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TransferProofProtocol;
-
-impl AsRef<str> for TransferProofProtocol {
-    fn as_ref(&self) -> &str {
-        PROTOCOL
+pub fn protocol(chain: Chain) -> &'static str {
+    match chain {
+        Chain::Bitcoin => PROTOCOL,
+        Chain::Litecoin => PROTOCOL_LTC,
     }
 }
 
@@ -27,26 +27,32 @@ pub struct Request {
     pub tx_lock_proof: swap_core::monero::TransferProof,
 }
 
-pub fn alice(metrics: Option<RequestResponseMetrics>) -> Behaviour {
+pub fn alice(chain: Chain, metrics: Option<RequestResponseMetrics>) -> Behaviour {
     Metered::new(
         request_response::cbor::Behaviour::new(
-            vec![(StreamProtocol::new(PROTOCOL), ProtocolSupport::Outbound)],
+            vec![(
+                StreamProtocol::new(protocol(chain)),
+                ProtocolSupport::Outbound,
+            )],
             request_response::Config::default()
                 .with_request_timeout(crate::defaults::DEFAULT_REQUEST_TIMEOUT),
         ),
-        PROTOCOL,
+        protocol(chain),
         metrics,
     )
 }
 
-pub fn bob() -> Behaviour {
+pub fn bob(chain: Chain) -> Behaviour {
     Metered::new(
         request_response::cbor::Behaviour::new(
-            vec![(StreamProtocol::new(PROTOCOL), ProtocolSupport::Inbound)],
+            vec![(
+                StreamProtocol::new(protocol(chain)),
+                ProtocolSupport::Inbound,
+            )],
             request_response::Config::default()
                 .with_request_timeout(crate::defaults::DEFAULT_REQUEST_TIMEOUT),
         ),
-        PROTOCOL,
+        protocol(chain),
         None,
     )
 }

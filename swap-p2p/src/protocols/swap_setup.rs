@@ -16,15 +16,23 @@ pub mod protocol {
     use futures::future;
     use libp2p::core::Endpoint;
     use libp2p::swarm::Stream;
+    use swap_chain::Chain;
     use void::Void;
 
     use super::vendor_from_fn::{FromFnUpgrade, from_fn};
 
-    pub fn new() -> SwapSetup {
-        from_fn(
-            "/comit/xmr/btc/swap_setup/1.0.0",
-            Box::new(|socket, _| future::ready(Ok(socket))),
-        )
+    const PROTOCOL: &str = "/comit/xmr/btc/swap_setup/1.0.0";
+    const PROTOCOL_LTC: &str = "/comit/xmr/ltc/swap_setup/1.0.0";
+
+    pub fn name(chain: Chain) -> &'static str {
+        match chain {
+            Chain::Bitcoin => PROTOCOL,
+            Chain::Litecoin => PROTOCOL_LTC,
+        }
+    }
+
+    pub fn new(chain: Chain) -> SwapSetup {
+        from_fn(name(chain), Box::new(|socket, _| future::ready(Ok(socket))))
     }
 
     pub type SwapSetup = FromFnUpgrade<

@@ -10927,6 +10927,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_cbor",
+ "swap-chain",
  "swap-core",
  "swap-env",
  "swap-feed",

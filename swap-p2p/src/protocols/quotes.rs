@@ -52,11 +52,11 @@ pub struct Behaviour {
 }
 
 impl Behaviour {
-    pub fn new(identify_config: identify::Config) -> Self {
+    pub fn new(chain: swap_chain::Chain, identify_config: identify::Config) -> Self {
         Self {
             inner: InnerBehaviour {
-                quote: quote::bob(),
-                notice: notice::Behaviour::new(StreamProtocol::new(quote::PROTOCOL)),
+                quote: quote::bob(chain),
+                notice: notice::Behaviour::new(StreamProtocol::new(quote::protocol(chain))),
                 redial: redial::Behaviour::new(
                     "quotes",
                     crate::defaults::QUOTE_REDIAL_INTERVAL,
@@ -396,13 +396,17 @@ mod tests {
     #[tokio::test]
     async fn receive_quote_from_alice() {
         // Create the swarm for Bob
-        let mut bob =
-            new_swarm(|identity| Behaviour::new(identify_config(identity, "quotes", "1.0.0")));
+        let mut bob = new_swarm(|identity| {
+            Behaviour::new(
+                swap_chain::Chain::Bitcoin,
+                identify_config(identity, "quotes", "1.0.0"),
+            )
+        });
 
         // Create the swarm for Alice
         // Let her listen on a random memory address
         // Let her respond to requests
-        let alice = new_swarm(|_| quote::alice(None));
+        let alice = new_swarm(|_| quote::alice(swap_chain::Chain::Bitcoin, None));
         let (alice_peer_id, alice_addr, alice_handle) = serve_quotes(alice).await;
 
         // Tell Bob about Alice's address
@@ -434,11 +438,15 @@ mod tests {
     #[tokio::test]
     async fn receive_does_not_support_protocol_from_alice() {
         // Create the swarm for Bob
-        let mut bob =
-            new_swarm(|identity| Behaviour::new(identify_config(identity, "quotes", "1.0.0")));
+        let mut bob = new_swarm(|identity| {
+            Behaviour::new(
+                swap_chain::Chain::Bitcoin,
+                identify_config(identity, "quotes", "1.0.0"),
+            )
+        });
 
         // Use quote::bob() so Alice doesn't support inbound requests
-        let mut alice = new_swarm(|_| quote::bob());
+        let mut alice = new_swarm(|_| quote::bob(swap_chain::Chain::Bitcoin));
         let alice_peer_id = *alice.local_peer_id();
         let alice_addr = alice.listen_on_random_memory_address().await;
 
@@ -502,6 +510,52 @@ mod tests {
             connection_closed,
             "Bob should have noticed connection closed"
         );
+    }
+
+    /// A taker configured for Litecoin must not interop with a
+    /// Bitcoin maker: protocol negotiation has to fail cleanly.
+    #[tokio::test]
+    async fn litecoin_taker_does_not_interop_with_bitcoin_maker() {
+        let mut bob = new_swarm(|identity| {
+            Behaviour::new(
+                swap_chain::Chain::Litecoin,
+                identify_config(identity, "quotes", "1.0.0"),
+            )
+        });
+
+        // Alice serves quotes on the Bitcoin quote protocol
+        let alice = new_swarm(|_| quote::alice(swap_chain::Chain::Bitcoin, None));
+        let (alice_peer_id, alice_addr, alice_handle) = serve_quotes(alice).await;
+
+        bob.add_peer_address(alice_peer_id, alice_addr);
+
+        let timeout = tokio::time::sleep(Duration::from_secs(5));
+        tokio::pin!(timeout);
+
+        loop {
+            tokio::select! {
+                event = bob.select_next_some() => {
+                    match event {
+                        SwarmEvent::Behaviour(Event::DoesNotSupportProtocol { peer })
+                            if peer == alice_peer_id =>
+                        {
+                            break;
+                        }
+                        SwarmEvent::Behaviour(Event::QuoteReceived { peer, .. })
+                            if peer == alice_peer_id =>
+                        {
+                            panic!("A Litecoin taker received a quote from a Bitcoin maker");
+                        }
+                        _ => {}
+                    }
+                }
+                _ = &mut timeout => {
+                    panic!("Timeout waiting for DoesNotSupportProtocol");
+                }
+            }
+        }
+
+        alice_handle.abort();
     }
 
     /// Ensures that Alice responds with a zero quote when requested.

@@ -1,15 +1,23 @@
 use libp2p::rendezvous::Namespace;
 use std::fmt;
+use swap_chain::Chain;
 
+/// The rendezvous namespace a maker registers under, one per
+/// (script chain, network) pair so takers only ever discover makers
+/// serving their chain.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum XmrBtcNamespace {
     Mainnet,
     Testnet,
+    LitecoinMainnet,
+    LitecoinTestnet,
     RendezvousPoint,
 }
 
 const MAINNET: &str = "xmr-btc-swap-mainnet";
 const TESTNET: &str = "xmr-btc-swap-testnet";
+const MAINNET_LTC: &str = "xmr-ltc-swap-mainnet";
+const TESTNET_LTC: &str = "xmr-ltc-swap-testnet";
 const RENDEZVOUS_POINT: &str = "rendezvous-point";
 
 impl fmt::Display for XmrBtcNamespace {
@@ -17,6 +25,8 @@ impl fmt::Display for XmrBtcNamespace {
         match self {
             XmrBtcNamespace::Mainnet => write!(f, "{}", MAINNET),
             XmrBtcNamespace::Testnet => write!(f, "{}", TESTNET),
+            XmrBtcNamespace::LitecoinMainnet => write!(f, "{}", MAINNET_LTC),
+            XmrBtcNamespace::LitecoinTestnet => write!(f, "{}", TESTNET_LTC),
             XmrBtcNamespace::RendezvousPoint => write!(f, "{}", RENDEZVOUS_POINT),
         }
     }
@@ -27,6 +37,8 @@ impl From<XmrBtcNamespace> for Namespace {
         match namespace {
             XmrBtcNamespace::Mainnet => Namespace::from_static(MAINNET),
             XmrBtcNamespace::Testnet => Namespace::from_static(TESTNET),
+            XmrBtcNamespace::LitecoinMainnet => Namespace::from_static(MAINNET_LTC),
+            XmrBtcNamespace::LitecoinTestnet => Namespace::from_static(TESTNET_LTC),
             XmrBtcNamespace::RendezvousPoint => Namespace::from_static(RENDEZVOUS_POINT),
         }
     }
@@ -34,10 +46,15 @@ impl From<XmrBtcNamespace> for Namespace {
 
 impl XmrBtcNamespace {
     pub fn from_is_testnet(testnet: bool) -> XmrBtcNamespace {
-        if testnet {
-            XmrBtcNamespace::Testnet
-        } else {
-            XmrBtcNamespace::Mainnet
+        Self::for_chain(Chain::Bitcoin, testnet)
+    }
+
+    pub fn for_chain(chain: Chain, testnet: bool) -> XmrBtcNamespace {
+        match (chain, testnet) {
+            (Chain::Bitcoin, false) => XmrBtcNamespace::Mainnet,
+            (Chain::Bitcoin, true) => XmrBtcNamespace::Testnet,
+            (Chain::Litecoin, false) => XmrBtcNamespace::LitecoinMainnet,
+            (Chain::Litecoin, true) => XmrBtcNamespace::LitecoinTestnet,
         }
     }
 }
