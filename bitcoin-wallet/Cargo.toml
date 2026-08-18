@@ -22,6 +22,7 @@ reqwest = { workspace = true, features = ["http2", "rustls-tls-native-roots", "s
 rust_decimal = { version = "1", features = ["serde-float"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+swap-chain = { path = "../swap-chain" }
 swap-env = { path = "../swap-env" }
 swap-proptest = { path = "../swap-proptest" }
 swap-serde = { path = "../swap-serde" }

@@ -165,19 +165,22 @@ reuse the existing validity/spread guards.
 
 ### M1 — Litecoin chain layer
 
-- [ ] `ChainParams::LITECOIN_{MAINNET,TESTNET,REGTEST}`:
-      HRPs, coin type 2', avg block time, dust/min-relay
-      (verify against litecoind 0.21+ defaults: minrelay 0.00001 LTC/kvB),
-      fee API base URL, explorer URL.
-- [ ] `ChainAddress` codec (parse/display by HRP, bech32 v0 only) + serde
-      (`swap-serde`), round-trip and rejection tests
-      (BTC addr on LTC swap, MWEB, base58).
-- [ ] `bitcoin-wallet`: thread `ChainParams` through `WalletBuilder`/`WalletConfig`;
-      descriptor `m/84'/2'/0'` for LTC mainnet (`m/84'/1'/0'` testnet);
-      chain-scoped wallet directory (avoid collision in a shared data dir);
-      skip legacy pre-BDK-1.0 migration for LTC;
-      fee estimation: electrum `estimatefee` (unchanged) +
-      litecoinspace.org `/api/v1/fees/recommended` behind the params base URL.
+- [x] `ChainParams` for Litecoin: HRPs, coin type 2,
+      fee API base URL, explorer URL (in `swap-chain`;
+      dust/min-relay verification against litecoind defaults moved
+      to the M5 harness work where litecoind is actually running).
+- [x] `ChainAddress` codec (parse/display by HRP, bech32 v0 only)
+      with string serde, shadow-address mapping for bdk interop,
+      round-trip and rejection tests (wrong chain/network, taproot,
+      unknown HRP, P2WSH-vs-P2WPKH guard).
+- [x] `bitcoin-wallet`: `chain` on `WalletConfig` (default Bitcoin) and
+      `Wallet`; per-chain descriptors — Bitcoin keeps bdk's `Bip84`
+      template byte-for-byte (locked by test), Litecoin derives at
+      `m/84'/2'/0'` on mainnet and `m/84'/1'/0'` on testnets;
+      chain-scoped wallet directory (`wallet-litecoin`);
+      legacy pre-BDK-1.0 migration skipped for non-Bitcoin chains;
+      mempool.space client resolves its base URL from `ChainParams`
+      (litecoinspace.org for LTC mainnet/testnet, unavailable on regtest).
 - [ ] **Early spike (de-risk):** create an LTC regtest wallet against
       litecoind + an LTC electrum server;
       verify BDK sync/broadcast with the shadow network

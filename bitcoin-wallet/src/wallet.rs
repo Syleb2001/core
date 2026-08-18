@@ -9,7 +9,9 @@ use bdk_wallet::KeychainKind;
 use bdk_wallet::WalletPersister;
 use bdk_wallet::bitcoin::FeeRate;
 use bdk_wallet::bitcoin::Network;
+use bdk_wallet::descriptor::{ExtendedDescriptor, IntoWalletDescriptor};
 use bdk_wallet::export::FullyNodedExport;
+use bdk_wallet::keys::KeyMap;
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::template::{Bip84, DescriptorTemplate};
 use bdk_wallet::{Balance, PersistedWallet};
@@ -30,6 +32,7 @@ use std::sync::Arc;
 use std::sync::Mutex as SyncMutex;
 use std::time::Duration;
 use std::time::Instant;
+use swap_chain::Chain;
 use sync_ext::{CumulativeProgressHandle, InnerSyncCallback, SyncCallbackExt};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::RwLock as TokioRwLock;
@@ -106,6 +109,10 @@ pub struct Wallet<Persister = Connection, C = Client> {
     cached_electrum_fee_estimator: Arc<CachedFeeEstimator<C>>,
     /// The cached fee estimator for the mempool client.
     cached_mempool_fee_estimator: Arc<Option<CachedFeeEstimator<mempool_client::MempoolClient>>>,
+    /// The script chain this wallet operates on. `network` is the chain's
+    /// internal (rust-bitcoin) representation; consensus structures are
+    /// shared between the supported chains.
+    chain: Chain,
     /// The network this wallet is on.
     network: Network,
     /// The number of confirmations (blocks) we require for a transaction
@@ -157,6 +164,8 @@ const DEFAULT_SUBSCRIPTION_IDLE_TIMEOUT: Duration = Duration::from_secs(4 * 60);
 )]
 pub struct WalletConfig<Seed: BitcoinWalletSeed> {
     seed: Seed,
+    #[builder(default = "Chain::Bitcoin")]
+    chain: Chain,
     network: Network,
     electrum_rpc_urls: Vec<String>,
     persister: PersisterConfig,
@@ -193,7 +202,10 @@ impl<Seed: BitcoinWalletSeed> WalletBuilder<Seed> {
                     .context("Failed to derive extended private key for file wallet")?;
 
                 let wallet_parent_dir = data_dir.join(Wallet::<Connection>::WALLET_PARENT_DIR_NAME);
-                let wallet_dir = wallet_parent_dir.join(Wallet::<Connection>::WALLET_DIR_NAME);
+                let wallet_dir = wallet_parent_dir.join(match config.chain {
+                    Chain::Bitcoin => Wallet::<Connection>::WALLET_DIR_NAME,
+                    Chain::Litecoin => Wallet::<Connection>::WALLET_DIR_NAME_LITECOIN,
+                });
                 let wallet_path = wallet_dir.join(Wallet::<Connection>::WALLET_FILE_NAME);
                 let wallet_exists = wallet_path.exists();
 
@@ -213,6 +225,7 @@ impl<Seed: BitcoinWalletSeed> WalletBuilder<Seed> {
 
                     Wallet::create_existing(
                         xprivkey,
+                        config.chain,
                         config.network,
                         client,
                         connection,
@@ -224,16 +237,22 @@ impl<Seed: BitcoinWalletSeed> WalletBuilder<Seed> {
                     .await
                     .context("Failed to load existing wallet")
                 } else {
-                    let old_wallet_export = Wallet::<Connection>::get_pre_1_0_bdk_wallet_export(
-                        data_dir,
-                        config.network,
-                        &config.seed,
-                    )
-                    .await
-                    .context("Failed to get pre-1.0.0 BDK wallet export for migration")?;
+                    // The legacy (pre-1.0 bdk) wallet only ever existed for Bitcoin.
+                    let old_wallet_export = if config.chain == Chain::Bitcoin {
+                        Wallet::<Connection>::get_pre_1_0_bdk_wallet_export(
+                            data_dir,
+                            config.network,
+                            &config.seed,
+                        )
+                        .await
+                        .context("Failed to get pre-1.0.0 BDK wallet export for migration")?
+                    } else {
+                        None
+                    };
 
                     Wallet::create_new(
                         xprivkey,
+                        config.chain,
                         config.network,
                         client,
                         open_connection,
@@ -258,6 +277,7 @@ impl<Seed: BitcoinWalletSeed> WalletBuilder<Seed> {
 
                 Wallet::create_new::<Connection>(
                     xprivkey,
+                    config.chain,
                     config.network,
                     client,
                     move || Ok(persister),
@@ -279,6 +299,39 @@ impl<Seed: BitcoinWalletSeed> WalletBuilder<Seed> {
 pub enum PersisterConfig {
     SqliteFile { data_dir: PathBuf },
     InMemorySqlite,
+}
+
+/// Build the BIP-84 wallet descriptor for the given chain and keychain.
+///
+/// Bitcoin keeps using bdk's `Bip84` template (coin type 0'/1') so existing
+/// wallets keep loading unchanged; other chains derive at their SLIP-44 coin
+/// type so wallet keys never overlap across chains.
+fn build_descriptor(
+    xprivkey: Xpriv,
+    chain: Chain,
+    network: Network,
+    keychain: KeychainKind,
+) -> Result<(ExtendedDescriptor, KeyMap)> {
+    if chain == Chain::Bitcoin {
+        let (descriptor, keymap, _valid_networks) = Bip84(xprivkey, keychain).build(network)?;
+        return Ok((descriptor, keymap));
+    }
+
+    let coin_type = if network == Network::Bitcoin {
+        chain.params().slip44_coin_type
+    } else {
+        // SLIP-44 reserves coin type 1 for the testnets of all chains.
+        1
+    };
+    let keychain_index = match keychain {
+        KeychainKind::External => 0,
+        KeychainKind::Internal => 1,
+    };
+    let descriptor = format!("wpkh({xprivkey}/84'/{coin_type}'/0'/{keychain_index}/*)");
+
+    let (descriptor, keymap) =
+        descriptor.into_wallet_descriptor(&bitcoin::secp256k1::Secp256k1::new(), network)?;
+    Ok((descriptor, keymap))
 }
 
 /// A caching wrapper around EstimateFeeRate implementations.
@@ -373,6 +426,7 @@ impl Wallet {
 
     const WALLET_PARENT_DIR_NAME: &str = "wallet";
     const WALLET_DIR_NAME: &str = "wallet-post-bdk-1.0";
+    const WALLET_DIR_NAME_LITECOIN: &str = "wallet-litecoin";
     const WALLET_FILE_NAME: &str = "wallet-db.sqlite";
 
     async fn get_pre_1_0_bdk_wallet_export(
@@ -451,6 +505,7 @@ impl Wallet {
         if wallet_exists {
             Self::create_existing(
                 xprivkey,
+                Chain::Bitcoin,
                 network,
                 client,
                 connection()?,
@@ -467,6 +522,7 @@ impl Wallet {
 
             Self::create_new(
                 xprivkey,
+                Chain::Bitcoin,
                 network,
                 client,
                 connection,
@@ -493,6 +549,7 @@ impl Wallet {
     ) -> Result<Wallet<bdk_wallet::rusqlite::Connection, Client>> {
         Self::create_new(
             seed.derive_extended_private_key(network)?,
+            Chain::Bitcoin,
             network,
             Client::new(electrum_rpc_urls, sync_interval)
                 .await
@@ -515,6 +572,7 @@ impl Wallet {
     #[allow(clippy::too_many_arguments)]
     async fn create_new<Persister>(
         xprivkey: Xpriv,
+        chain: Chain,
         network: Network,
         client: Client,
         persister_constructor: impl FnOnce() -> Result<Persister>,
@@ -528,13 +586,13 @@ impl Wallet {
         Persister: WalletPersister + Sized,
         <Persister as WalletPersister>::Error: std::error::Error + Send + Sync + 'static,
     {
-        let external_descriptor = Bip84(xprivkey, KeychainKind::External)
-            .build(network)
-            .context("Failed to build external wallet descriptor")?;
+        let external_descriptor =
+            build_descriptor(xprivkey, chain, network, KeychainKind::External)
+                .context("Failed to build external wallet descriptor")?;
 
-        let internal_descriptor = Bip84(xprivkey, KeychainKind::Internal)
-            .build(network)
-            .context("Failed to build change wallet descriptor")?;
+        let internal_descriptor =
+            build_descriptor(xprivkey, chain, network, KeychainKind::Internal)
+                .context("Failed to build change wallet descriptor")?;
 
         // Build the wallet without a persister
         // because we create the persistence AFTER the full scan
@@ -598,7 +656,7 @@ impl Wallet {
 
         // Create the mempool client
         let mempool_client = if use_mempool_space_fee_estimation {
-            mempool_client::MempoolClient::new(network).inspect_err(|e| {
+            mempool_client::MempoolClient::new(chain, network).inspect_err(|e| {
                 tracing::warn!("Failed to create mempool client: {:?}. We will only use the Electrum server for fee estimation.", e);
             }).ok()
         } else {
@@ -617,6 +675,7 @@ impl Wallet {
             cached_mempool_fee_estimator,
             persister: persister.into_arc_mutex_async(),
             tauri_handle,
+            chain,
             network,
             finality_confirmations,
             target_block,
@@ -627,6 +686,7 @@ impl Wallet {
     #[allow(clippy::too_many_arguments)]
     async fn create_existing<Persister>(
         xprivkey: Xpriv,
+        chain: Chain,
         network: Network,
         client: Client,
         mut persister: Persister,
@@ -639,13 +699,13 @@ impl Wallet {
         Persister: WalletPersister + Sized,
         <Persister as WalletPersister>::Error: std::error::Error + Send + Sync + 'static,
     {
-        let external_descriptor = Bip84(xprivkey, KeychainKind::External)
-            .build(network)
-            .context("Failed to build external wallet descriptor")?;
+        let external_descriptor =
+            build_descriptor(xprivkey, chain, network, KeychainKind::External)
+                .context("Failed to build external wallet descriptor")?;
 
-        let internal_descriptor = Bip84(xprivkey, KeychainKind::Internal)
-            .build(network)
-            .context("Failed to build change wallet descriptor")?;
+        let internal_descriptor =
+            build_descriptor(xprivkey, chain, network, KeychainKind::Internal)
+                .context("Failed to build change wallet descriptor")?;
 
         tracing::debug!("Loading existing Bitcoin wallet from database");
 
@@ -659,7 +719,7 @@ impl Wallet {
 
         // Create the mempool client with caching
         let cached_mempool_fee_estimator = if use_mempool_space_fee_estimation {
-            mempool_client::MempoolClient::new(network).inspect_err(|e| {
+            mempool_client::MempoolClient::new(chain, network).inspect_err(|e| {
                 tracing::warn!("Failed to create mempool client: {:?}. We will only use the Electrum server for fee estimation.", e);
             }).ok().map(CachedFeeEstimator::new)
         } else {
@@ -676,6 +736,7 @@ impl Wallet {
             cached_mempool_fee_estimator: Arc::new(cached_mempool_fee_estimator),
             persister: persister.into_arc_mutex_async(),
             tauri_handle,
+            chain,
             network,
             finality_confirmations,
             target_block,
@@ -1150,6 +1211,11 @@ impl Wallet {
 
 // These are the methods that are always available, regardless of the persister.
 impl<T, C> Wallet<T, C> {
+    /// Get the script chain of this wallet.
+    pub fn chain(&self) -> Chain {
+        self.chain
+    }
+
     /// Get the network of this wallet.
     pub fn network(&self) -> Network {
         self.network
@@ -2656,13 +2722,13 @@ pub fn estimate_fee(
 
 mod mempool_client {
     static HTTP_TIMEOUT: Duration = Duration::from_secs(15);
-    static BASE_URL: &str = "https://mempool.space";
 
     use super::EstimateFeeRate;
     use anyhow::{Context, Result, bail};
     use bitcoin::{FeeRate, Network};
     use serde::Deserialize;
     use std::time::Duration;
+    use swap_chain::Chain;
 
     /// A client for the mempool.space API.
     ///
@@ -2683,11 +2749,14 @@ mod mempool_client {
     }
 
     impl MempoolClient {
-        pub fn new(network: Network) -> Result<Self> {
-            let base_url = match network {
-                Network::Bitcoin => BASE_URL.to_string(),
-                Network::Testnet => format!("{}/testnet", BASE_URL),
-                Network::Signet => format!("{}/signet", BASE_URL),
+        pub fn new(chain: Chain, network: Network) -> Result<Self> {
+            let Some(api_base_url) = chain.params().fee_api_base_url else {
+                bail!("no mempool.space-compatible fee API is known for {chain}");
+            };
+            let base_url = match (chain, network) {
+                (_, Network::Bitcoin) => api_base_url.to_string(),
+                (_, Network::Testnet) => format!("{}/testnet", api_base_url),
+                (Chain::Bitcoin, Network::Signet) => format!("{}/signet", api_base_url),
                 _ => bail!("mempool.space fee estimation unsupported for network"),
             };
 
@@ -2697,6 +2766,11 @@ mod mempool_client {
                 .context("Failed to build mempool.space HTTP client")?;
 
             Ok(MempoolClient { client, base_url })
+        }
+
+        #[cfg(test)]
+        pub(super) fn base_url(&self) -> &str {
+            &self.base_url
         }
 
         /// Fetch the fees (`fees/recommended` endpoint) from the mempool.space API
@@ -2962,6 +3036,7 @@ impl TestWalletBuilder {
             cached_mempool_fee_estimator: Arc::new(None), // We don't use mempool client in tests
             persister: persister.into_arc_mutex_async(),
             tauri_handle: None,
+            chain: Chain::Bitcoin,
             network: Network::Regtest,
             finality_confirmations: 1,
             target_block: 1,
@@ -3094,5 +3169,94 @@ impl BitcoinWallet for Wallet<Connection, StaticFeeRate> {
 
     async fn wallet_export(&self, role: &str) -> Result<FullyNodedExport> {
         unimplemented!("stub method called erroneously")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_xpriv(network: Network) -> Xpriv {
+        Xpriv::new_master(network, &[42u8; 32]).unwrap()
+    }
+
+    #[test]
+    fn bitcoin_descriptor_matches_bip84_template() {
+        for network in [Network::Bitcoin, Network::Testnet, Network::Regtest] {
+            let xpriv = test_xpriv(network);
+            for keychain in [KeychainKind::External, KeychainKind::Internal] {
+                let (descriptor, _) =
+                    build_descriptor(xpriv, Chain::Bitcoin, network, keychain).unwrap();
+                let (template_descriptor, _, _) = Bip84(xpriv, keychain).build(network).unwrap();
+
+                assert_eq!(descriptor, template_descriptor);
+            }
+        }
+    }
+
+    #[test]
+    fn litecoin_mainnet_derives_at_slip44_coin_type_2() {
+        let xpriv = test_xpriv(Network::Bitcoin);
+        let (litecoin, _) = build_descriptor(
+            xpriv,
+            Chain::Litecoin,
+            Network::Bitcoin,
+            KeychainKind::External,
+        )
+        .unwrap();
+        let (bitcoin, _) = build_descriptor(
+            xpriv,
+            Chain::Bitcoin,
+            Network::Bitcoin,
+            KeychainKind::External,
+        )
+        .unwrap();
+
+        let path = litecoin.to_string().replace('h', "'");
+        assert!(path.contains("/84'/2'/0'"), "unexpected path in {path}");
+        // Different coin types must never produce overlapping keys.
+        assert_ne!(litecoin, bitcoin);
+    }
+
+    #[test]
+    fn testnets_share_slip44_coin_type_1_across_chains() {
+        for network in [Network::Testnet, Network::Regtest] {
+            let xpriv = test_xpriv(network);
+            let (litecoin, _) =
+                build_descriptor(xpriv, Chain::Litecoin, network, KeychainKind::External).unwrap();
+            let (bitcoin, _) =
+                build_descriptor(xpriv, Chain::Bitcoin, network, KeychainKind::External).unwrap();
+
+            // SLIP-44 reserves coin type 1 for the testnets of all chains,
+            // so the derivations coincide there by design.
+            assert_eq!(litecoin, bitcoin);
+        }
+    }
+
+    #[test]
+    fn litecoin_descriptor_keymap_can_sign() {
+        let (_, keymap) = build_descriptor(
+            test_xpriv(Network::Bitcoin),
+            Chain::Litecoin,
+            Network::Bitcoin,
+            KeychainKind::External,
+        )
+        .unwrap();
+
+        assert!(!keymap.is_empty(), "keymap must contain the private key");
+    }
+
+    #[test]
+    fn mempool_client_base_urls_per_chain() {
+        let btc = mempool_client::MempoolClient::new(Chain::Bitcoin, Network::Bitcoin).unwrap();
+        let ltc = mempool_client::MempoolClient::new(Chain::Litecoin, Network::Bitcoin).unwrap();
+        let ltc_testnet =
+            mempool_client::MempoolClient::new(Chain::Litecoin, Network::Testnet).unwrap();
+
+        assert_eq!(btc.base_url(), "https://mempool.space");
+        assert_eq!(ltc.base_url(), "https://litecoinspace.org");
+        assert_eq!(ltc_testnet.base_url(), "https://litecoinspace.org/testnet");
+        assert!(mempool_client::MempoolClient::new(Chain::Litecoin, Network::Signet).is_err());
+        assert!(mempool_client::MempoolClient::new(Chain::Litecoin, Network::Regtest).is_err());
     }
 }

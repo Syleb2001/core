@@ -1124,6 +1124,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "swap-chain",
  "swap-env",
  "swap-proptest",
  "swap-serde",
