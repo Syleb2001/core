@@ -249,11 +249,16 @@ reuse the existing validity/spread guards.
       min/max enforcement in `swap_setup/alice.rs` unchanged (verify).
 - [ ] Swap runner (`protocol::alice::run` / `bob::run`):
       should need no logic change — verify timelock/fee paths use env config only.
-- [ ] Controller/RPC + tauri layer: chain-aware address validation for
-      `WithdrawBtc`/`set_external_bitcoin_redeem_address`
-      (until then a Litecoin ASB cannot withdraw via CLI/RPC);
-      neutralize `AmountExt::max_bitcoin_for_price` and the
-      "XMR/BTC" display labels in `swap-asb`.
+- [x] `WithdrawBtc` validates the address against the configured chain
+      at runtime: Bitcoin keeps its historical behavior (any address
+      type on the right network, base58 included), Litecoin accepts
+      its bech32 form and maps it to the shadow address.
+- [ ] RPC/controller: `set_external_bitcoin_redeem_address` and the
+      config's `external_bitcoin_redeem_address` still parse with the
+      Bitcoin-only serde — a Litecoin ASB cannot set an external
+      redeem address yet.
+- [ ] Neutralize `AmountExt::max_bitcoin_for_price` and the
+      "XMR/BTC" display labels in `swap-asb` (cosmetic).
 
 ### M5 — Integration tests (docker)
 

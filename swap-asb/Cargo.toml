@@ -24,6 +24,7 @@ bitcoin-wallet = { path = "../bitcoin-wallet" }
 monero-rpc-pool = { path = "../monero-rpc-pool" }
 monero-sys = { path = "../monero-sys" }
 swap = { path = "../swap" }
+swap-chain = { path = "../swap-chain" }
 swap-env = { path = "../swap-env" }
 swap-feed = { path = "../swap-feed" }
 swap-machine = { path = "../swap-machine" }
@@ -44,3 +45,6 @@ structopt = "0.3"
 [build-dependencies]
 anyhow = { workspace = true }
 vergen = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }

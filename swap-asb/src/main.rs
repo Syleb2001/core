@@ -513,6 +513,7 @@ pub async fn main() -> Result<()> {
             }
         }
         Command::WithdrawBtc { amount, address } => {
+            let address = parse_withdraw_address(&address, &config, env_config)?;
             let bitcoin_wallet = init_bitcoin_wallet(&config, &seed, env_config, true).await?;
 
             let withdraw_tx_unsigned = match amount {
@@ -679,6 +680,32 @@ primary address: {primary_address}");
     }
 
     Ok(())
+}
+
+/// Validate a withdraw address against the configured script chain.
+///
+/// Bitcoin keeps the historical behavior (any address type on the right
+/// network); other chains accept their bech32 (segwit v0) form and are
+/// mapped to the internal shadow address the wallet operates on.
+fn parse_withdraw_address(
+    address: &str,
+    config: &Config,
+    env_config: swap_env::env::Config,
+) -> Result<bitcoin::Address> {
+    let (chain, _) = config.script_chain()?;
+
+    match chain {
+        swap_chain::Chain::Bitcoin => bitcoin_wallet::bitcoin_address::parse_and_validate_network(
+            address,
+            env_config.bitcoin_network,
+        ),
+        swap_chain::Chain::Litecoin => {
+            let address =
+                swap_chain::ChainAddress::parse_for(address, chain, env_config.bitcoin_network)?
+                    .require_p2wpkh()?;
+            Ok(address.to_shadow_address())
+        }
+    }
 }
 
 async fn init_bitcoin_wallet(
@@ -862,6 +889,97 @@ impl SwapDetails {
             taker_peer_id = %self.peer_id,
             completed = self.completed,
             "Found swap in database"
+        );
+    }
+}
+
+#[cfg(test)]
+mod withdraw_address_tests {
+    use super::*;
+
+    fn config(section: &str) -> Config {
+        toml::from_str(&format!(
+            r#"
+            [data]
+            dir = "/tmp/asb-data"
+
+            [network]
+            listen = ["/ip4/0.0.0.0/tcp/9939"]
+
+            [monero]
+            network = "Mainnet"
+
+            [tor]
+            register_hidden_service = false
+            hidden_service_num_intro_points = 5
+
+            [maker]
+            min_buy_btc = 0.002
+            max_buy_btc = 0.02
+            ask_spread = 0.02
+
+            [{section}]
+            electrum_rpc_urls = ["ssl://example.com:50002"]
+            target_block = 1
+            network = "Mainnet"
+            "#
+        ))
+        .expect("config fixture to parse")
+    }
+
+    fn env_config(config: &Config) -> swap_env::env::Config {
+        swap_env::env::new(false, config).expect("fixture env config")
+    }
+
+    #[test]
+    fn bitcoin_withdraw_keeps_accepting_any_address_type() {
+        let config = config("bitcoin");
+        let env_config = env_config(&config);
+
+        // Legacy base58 stays supported on Bitcoin
+        let legacy =
+            parse_withdraw_address("1KFHE7w8BhaENAswwryaoccDb6qcT6DbYY", &config, env_config)
+                .unwrap();
+        assert_eq!(legacy.to_string(), "1KFHE7w8BhaENAswwryaoccDb6qcT6DbYY");
+
+        assert!(
+            parse_withdraw_address(
+                "ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9",
+                &config,
+                env_config
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn litecoin_withdraw_accepts_ltc_and_rejects_btc_addresses() {
+        let config = config("litecoin");
+        let env_config = env_config(&config);
+
+        let address = parse_withdraw_address(
+            "ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9",
+            &config,
+            env_config,
+        )
+        .unwrap();
+        // The wallet operates on the shadow (rust-bitcoin) representation
+        assert_eq!(
+            address.to_string(),
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+        );
+
+        assert!(
+            parse_withdraw_address(
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+                &config,
+                env_config
+            )
+            .is_err()
+        );
+        assert!(
+            parse_withdraw_address("1KFHE7w8BhaENAswwryaoccDb6qcT6DbYY", &config, env_config)
+                .is_err()
         );
     }
 }

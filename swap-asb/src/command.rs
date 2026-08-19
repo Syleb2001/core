@@ -79,10 +79,7 @@ where
             trace,
             config_path: config_path(config, testnet)?,
             env_config: env_config(testnet),
-            cmd: Command::WithdrawBtc {
-                amount,
-                address: bitcoin_address::validate(address, testnet)?,
-            },
+            cmd: Command::WithdrawBtc { amount, address },
         },
         RawCommand::Balance => Arguments {
             testnet,
@@ -241,7 +238,8 @@ pub enum Command {
     },
     WithdrawBtc {
         amount: Option<Amount>,
-        address: Address,
+        // Validated in main once the configured script chain is known
+        address: String,
     },
     Balance,
     Redeem {
@@ -361,8 +359,11 @@ pub enum RawCommand {
             help = "Optionally specify the amount of Bitcoin to be withdrawn. If not specified the wallet will be drained. Amount must be specified in quotes with denomination, e.g `--amount '0.1 BTC'`"
         )]
         amount: Option<Amount>,
-        #[structopt(long = "address", help = "The address to receive the Bitcoin.")]
-        address: Address<NetworkUnchecked>,
+        #[structopt(
+            long = "address",
+            help = "The address to receive the funds. Validated against the config's script chain."
+        )]
+        address: String,
     },
     #[structopt(
         about = "Prints the Bitcoin and Monero balance. Requires the monero-wallet-rpc to be running."
@@ -573,8 +574,7 @@ mod tests {
 
             cmd: Command::WithdrawBtc {
                 amount: None,
-                address: bitcoin_address::parse_and_validate(BITCOIN_MAINNET_ADDRESS, false)
-                    .unwrap(),
+                address: BITCOIN_MAINNET_ADDRESS.to_string(),
             },
         };
         let args = parse_args(raw_ars).unwrap();
@@ -812,8 +812,7 @@ mod tests {
 
             cmd: Command::WithdrawBtc {
                 amount: None,
-                address: bitcoin_address::parse_and_validate(BITCOIN_TESTNET_ADDRESS, true)
-                    .unwrap(),
+                address: BITCOIN_TESTNET_ADDRESS.to_string(),
             },
         };
         let args = parse_args(raw_ars).unwrap();
