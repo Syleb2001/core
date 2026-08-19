@@ -346,7 +346,7 @@ mod context {
             bob_monero_wallet: Arc<monero::Wallets>,
         ) -> Self {
             let config = Config::for_harness(seed, env_config);
-            let db = open_db(db_path, AccessMode::ReadWrite, None)
+            let db = open_db(db_path, AccessMode::ReadWrite, env_config.chain, None)
                 .await
                 .expect("Could not open sqlite database");
 
@@ -763,6 +763,8 @@ mod builder {
                 let db = open_db(
                     data_dir.join("sqlite"),
                     AccessMode::ReadWrite,
+                    // The taker side serves Bitcoin only for now
+                    swap_chain::Chain::Bitcoin,
                     self.tauri_handle.clone(),
                 )
                 .await?;

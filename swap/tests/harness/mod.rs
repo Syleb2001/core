@@ -397,9 +397,13 @@ async fn start_alice(
         tokio::fs::File::create(&db_path).await.unwrap();
     }
     let db = Arc::new(
-        SqliteDatabase::open(db_path.as_path(), AccessMode::ReadWrite)
-            .await
-            .unwrap(),
+        SqliteDatabase::open(
+            db_path.as_path(),
+            AccessMode::ReadWrite,
+            swap_chain::Chain::Bitcoin,
+        )
+        .await
+        .unwrap(),
     );
 
     let min_buy = bitcoin::Amount::from_sat(u64::MIN);
@@ -686,7 +690,14 @@ impl BobParams {
         if !self.db_path.exists() {
             tokio::fs::File::create(&self.db_path).await?;
         }
-        let db = Arc::new(SqliteDatabase::open(&self.db_path, AccessMode::ReadWrite).await?);
+        let db = Arc::new(
+            SqliteDatabase::open(
+                &self.db_path,
+                AccessMode::ReadWrite,
+                swap_chain::Chain::Bitcoin,
+            )
+            .await?,
+        );
 
         let (event_loop, mut handle) = self.new_eventloop(db.clone()).await?;
 
@@ -741,7 +752,14 @@ impl BobParams {
         if !self.db_path.exists() {
             tokio::fs::File::create(&self.db_path).await?;
         }
-        let db = Arc::new(SqliteDatabase::open(&self.db_path, AccessMode::ReadWrite).await?);
+        let db = Arc::new(
+            SqliteDatabase::open(
+                &self.db_path,
+                AccessMode::ReadWrite,
+                swap_chain::Chain::Bitcoin,
+            )
+            .await?,
+        );
 
         let (event_loop, mut handle) = self.new_eventloop(db.clone()).await?;
 
@@ -940,9 +958,13 @@ impl TestContext {
 
         // Load the latest state, apply the mutation, and persist it again.
         {
-            let db = SqliteDatabase::open(self.alice_db_path.as_path(), AccessMode::ReadWrite)
-                .await
-                .unwrap();
+            let db = SqliteDatabase::open(
+                self.alice_db_path.as_path(),
+                AccessMode::ReadWrite,
+                swap_chain::Chain::Bitcoin,
+            )
+            .await
+            .unwrap();
             let State::Alice(mut alice_state) = db.get_state(swap_id).await.unwrap() else {
                 panic!("expected an Alice state for swap {swap_id}");
             };

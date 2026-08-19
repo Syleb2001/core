@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT s.swap_id, s.state, p.peer_id\n            FROM (\n                SELECT max(id) as id, swap_id, state, entered_at\n                FROM swap_states\n                WHERE chain = ?\n                GROUP BY swap_id\n            ) s\n            INNER JOIN peers p ON s.swap_id = p.swap_id\n            WHERE CAST(strftime('%s', substr(s.entered_at, 1, 19)) AS INTEGER)\n                  >= CAST(strftime('%s', 'now') AS INTEGER) - ?\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "swap_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "state",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "peer_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "425ef52adc2ecee908bad50360c0fc29b60d8b61eed65bb1aaeb5b817f1be318"
+}

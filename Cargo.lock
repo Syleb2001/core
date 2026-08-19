@@ -10642,6 +10642,7 @@ dependencies = [
  "sqlx",
  "structopt",
  "strum 0.26.3",
+ "swap-chain",
  "swap-controller-api",
  "swap-core",
  "swap-db",

@@ -217,14 +217,19 @@ reuse the existing validity/spread guards.
 
 ### M3 — P2P layer
 
-- [ ] Parameterize protocol id constants by chain;
-      add the `/comit/xmr/ltc/...` family (see S4)
-      and `XmrBtcNamespace` → chain-aware namespaces.
-- [ ] Identify protocol version / agent string per chain.
-- [ ] `BlockchainNetwork` for the LTC protocol
-      (script-chain network + monero network; new ids make this free).
-- [ ] `list_sellers` / rendezvous registration under the LTC namespace.
-- [ ] Negotiation tests: BTC client × LTC ASB must fail cleanly at negotiation.
+- [x] Protocol ids resolved per chain: the `/comit/xmr/ltc/...` family for
+      bid-quote, swap_setup, transfer_proof, encrypted_signature and
+      cooperative_xmr_redeem_after_punish; Bitcoin id strings untouched
+      and locked by tests (they are a network-wide convention).
+- [x] Identify protocol version per chain
+      (`swap_p2p::protocols::identify_protocol_version`).
+- [x] `BlockchainNetwork` unchanged: the new protocol ids discriminate the
+      chain, the `bitcoin` field carries the shadow network on both sides.
+- [x] The ASB registers under the chain-scoped rendezvous namespace
+      (`xmr-ltc-swap-{mainnet,testnet}`); the taker/CLI side keeps the
+      Bitcoin namespaces until the taker milestone (M6/GUI).
+- [x] Negotiation test: a Litecoin taker talking to a Bitcoin maker fails
+      cleanly with DoesNotSupportProtocol (`swap-p2p` quotes test).
 
 ### M4 — ASB event loop, feed, DB
 

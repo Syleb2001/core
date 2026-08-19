@@ -79,6 +79,7 @@ swap-fs = { path = "../swap-fs" }
 swap-machine = { path = "../swap-machine" }
 swap-p2p = { path = "../swap-p2p" }
 swap-proptest = { path = "../swap-proptest" }
+swap-chain = { path = "../swap-chain" }
 swap-serde = { path = "../swap-serde" }
 tauri = { version = "2.0", features = ["config-json5"], optional = true, default-features = false }
 time = "0.3"

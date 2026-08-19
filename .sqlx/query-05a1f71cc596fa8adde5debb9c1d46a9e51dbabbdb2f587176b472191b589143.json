@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n           SELECT state, chain\n           FROM swap_states\n           WHERE swap_id = ?\n           ORDER BY id desc\n           LIMIT 1;\n\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "state",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "chain",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "05a1f71cc596fa8adde5debb9c1d46a9e51dbabbdb2f587176b472191b589143"
+}

@@ -174,7 +174,7 @@ pub async fn main() -> Result<()> {
                 _ => None,
             };
 
-            let db = open_db(db_file, AccessMode::ReadWrite, None).await?;
+            let db = open_db(db_file, AccessMode::ReadWrite, env_config.chain, None).await?;
 
             let developer_tip = config.maker.developer_tip;
             if developer_tip.is_zero() {
@@ -448,7 +448,7 @@ pub async fn main() -> Result<()> {
         }
         Command::History { only_unfinished } => {
             let db: Arc<dyn Database + Send + Sync> =
-                open_db(db_file, AccessMode::ReadOnly, None).await?;
+                open_db(db_file, AccessMode::ReadOnly, env_config.chain, None).await?;
             let mut table = Table::new();
 
             table.set_header(vec![
@@ -541,7 +541,7 @@ pub async fn main() -> Result<()> {
             tracing::info!(%bitcoin_balance, %monero_balance, "Current balance");
         }
         Command::Cancel { swap_id } => {
-            let db = open_db(db_file, AccessMode::ReadWrite, None).await?;
+            let db = open_db(db_file, AccessMode::ReadWrite, env_config.chain, None).await?;
 
             let bitcoin_wallet = init_bitcoin_wallet(&config, &seed, env_config, true).await?;
 
@@ -550,7 +550,7 @@ pub async fn main() -> Result<()> {
             tracing::info!("Cancel transaction successfully published with id {}", txid);
         }
         Command::Refund { swap_id } => {
-            let db = open_db(db_file, AccessMode::ReadWrite, None).await?;
+            let db = open_db(db_file, AccessMode::ReadWrite, env_config.chain, None).await?;
 
             let bitcoin_wallet = init_bitcoin_wallet(&config, &seed, env_config, true).await?;
             let monero_wallet = init_monero_wallet(&config, env_config).await?;
@@ -560,7 +560,7 @@ pub async fn main() -> Result<()> {
             tracing::info!("Monero successfully refunded");
         }
         Command::Punish { swap_id } => {
-            let db = open_db(db_file, AccessMode::ReadWrite, None).await?;
+            let db = open_db(db_file, AccessMode::ReadWrite, env_config.chain, None).await?;
 
             let bitcoin_wallet = init_bitcoin_wallet(&config, &seed, env_config, true).await?;
 
@@ -569,14 +569,14 @@ pub async fn main() -> Result<()> {
             tracing::info!("Punish transaction successfully published with id {}", txid);
         }
         Command::SafelyAbort { swap_id } => {
-            let db = open_db(db_file, AccessMode::ReadWrite, None).await?;
+            let db = open_db(db_file, AccessMode::ReadWrite, env_config.chain, None).await?;
 
             safely_abort(swap_id, db).await?;
 
             tracing::info!("Swap safely aborted");
         }
         Command::GrantMercy { swap_id } => {
-            let db = open_db(db_file, AccessMode::ReadWrite, None).await?;
+            let db = open_db(db_file, AccessMode::ReadWrite, env_config.chain, None).await?;
 
             grant_mercy(swap_id, db).await?;
 
@@ -586,7 +586,7 @@ pub async fn main() -> Result<()> {
             swap_id,
             do_not_await_finality,
         } => {
-            let db = open_db(db_file, AccessMode::ReadWrite, None).await?;
+            let db = open_db(db_file, AccessMode::ReadWrite, env_config.chain, None).await?;
 
             let bitcoin_wallet = init_bitcoin_wallet(&config, &seed, env_config, true).await?;
 
@@ -616,7 +616,7 @@ pub async fn main() -> Result<()> {
             println!("Restore height: {creation_height}");
         }
         Command::ExportMoneroLockWallet { swap_id } => {
-            let db = open_db(db_file, AccessMode::ReadWrite, None).await?;
+            let db = open_db(db_file, AccessMode::ReadWrite, env_config.chain, None).await?;
             let bitcoin_wallet = init_bitcoin_wallet(&config, &seed, env_config, false).await?;
 
             let swap_states = db

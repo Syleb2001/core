@@ -14,6 +14,7 @@ use sqlx::sqlite::{Sqlite, SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{ConnectOptions, Pool};
 use std::path::Path;
 use std::str::FromStr;
+use swap_chain::Chain;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -27,10 +28,14 @@ const DATABASE_POOL_SIZE: u32 = 32;
 pub struct SqliteDatabase {
     pool: Pool<Sqlite>,
     tauri_handle: Option<TauriHandle>,
+    /// The script chain this process serves. Swaps are tagged with it on
+    /// insert; swaps of other chains are invisible to listings and refuse
+    /// to load, so a data dir can never be reused across chains.
+    chain: Chain,
 }
 
 impl SqliteDatabase {
-    pub async fn open(path: impl AsRef<Path>, access_mode: AccessMode) -> Result<Self>
+    pub async fn open(path: impl AsRef<Path>, access_mode: AccessMode, chain: Chain) -> Result<Self>
     where
         Self: std::marker::Sized,
     {
@@ -53,6 +58,7 @@ impl SqliteDatabase {
         let mut sqlite = Self {
             pool,
             tauri_handle: None,
+            chain,
         };
 
         if !read_only {
@@ -295,16 +301,18 @@ impl Database for SqliteDatabase {
 
     async fn get_swap_start_date(&self, swap_id: Uuid) -> Result<String> {
         let swap_id = swap_id.to_string();
+        let chain = self.chain.as_str();
 
         let row = sqlx::query!(
             r#"
                 SELECT entered_at as start_date
                 FROM swap_states
-                WHERE swap_id = ?
+                WHERE swap_id = ? AND chain = ?
                 ORDER BY id ASC
                 LIMIT 1
                 "#,
-            swap_id
+            swap_id,
+            chain
         )
         .fetch_one(&self.pool)
         .await?;
@@ -318,18 +326,21 @@ impl Database for SqliteDatabase {
         let swap = serde_json::to_string(&Swap::from(state))?;
         let entered_at = entered_at.to_string();
         let swap_id_str = swap_id.to_string();
+        let chain = self.chain.as_str();
 
         sqlx::query!(
             r#"
             insert into swap_states (
                 swap_id,
                 entered_at,
-                state
-                ) values (?, ?, ?);
+                state,
+                chain
+                ) values (?, ?, ?, ?);
         "#,
             swap_id_str,
             entered_at,
-            swap
+            swap,
+            chain
         )
         .execute(&self.pool)
         .await?;
@@ -345,7 +356,7 @@ impl Database for SqliteDatabase {
         let swap_id = swap_id.to_string();
         let row = sqlx::query!(
             r#"
-           SELECT state
+           SELECT state, chain
            FROM swap_states
            WHERE swap_id = ?
            ORDER BY id desc
@@ -360,22 +371,33 @@ impl Database for SqliteDatabase {
         let row = row
             .first()
             .context(format!("No state in database for swap: {}", swap_id))?;
+        if row.chain != self.chain.as_str() {
+            anyhow::bail!(
+                "Swap {} belongs to the {} chain but this process serves {}",
+                swap_id,
+                row.chain,
+                self.chain
+            );
+        }
         let swap: Swap = serde_json::from_str(&row.state)?;
 
         Ok(swap.into())
     }
 
     async fn all(&self) -> Result<Vec<(PeerId, Uuid, State)>> {
+        let chain = self.chain.as_str();
         let rows = sqlx::query!(
             r#"
             SELECT s.swap_id, s.state, p.peer_id
             FROM (
                 SELECT max(id), swap_id, state
                 FROM swap_states
+                WHERE chain = ?
                 GROUP BY swap_id
             ) s
             INNER JOIN peers p ON s.swap_id = p.swap_id
-        "#
+        "#,
+            chain
         )
         .fetch_all(&self.pool)
         .await?;
@@ -426,6 +448,7 @@ impl Database for SqliteDatabase {
         let limit = i32::try_from(limit)?;
         let offset = i32::try_from(offset)?;
 
+        let chain = self.chain.as_str();
         let rows = sqlx::query!(
             r#"
             SELECT
@@ -435,9 +458,9 @@ impl Database for SqliteDatabase {
                 newest.state       AS "last_state!: String",
                 oldest.entered_at  AS start_date
             FROM (SELECT swap_id, state, entered_at, MIN(id) AS id
-                  FROM swap_states GROUP BY swap_id) oldest
+                  FROM swap_states WHERE chain = ? GROUP BY swap_id) oldest
             JOIN (SELECT swap_id, state, MAX(id) AS id
-                  FROM swap_states GROUP BY swap_id) newest
+                  FROM swap_states WHERE chain = ? GROUP BY swap_id) newest
                 ON newest.swap_id = oldest.swap_id
             JOIN peers ON peers.swap_id = oldest.swap_id
             WHERE NOT (
@@ -448,6 +471,8 @@ impl Database for SqliteDatabase {
             LIMIT ?
             OFFSET ?
         "#,
+            chain,
+            chain,
             limit,
             offset
         )
@@ -496,11 +521,9 @@ impl Database for SqliteDatabase {
     async fn get_states(&self, swap_id: Uuid) -> Result<Vec<State>> {
         let swap_id = swap_id.to_string();
 
-        // TODO: We should use query! instead of query here to allow for at-compile-time validation
-        // I didn't manage to generate the mappings for the query! macro because of problems with sqlx-cli
         let rows = sqlx::query!(
             r#"
-           SELECT state
+           SELECT state, chain
            FROM swap_states
            WHERE swap_id = ?
            ORDER BY id ASC
@@ -509,6 +532,17 @@ impl Database for SqliteDatabase {
         )
         .fetch_all(&self.pool)
         .await?;
+
+        if let Some(row) = rows.first() {
+            if row.chain != self.chain.as_str() {
+                anyhow::bail!(
+                    "Swap {} belongs to the {} chain but this process serves {}",
+                    swap_id,
+                    row.chain,
+                    self.chain
+                );
+            }
+        }
 
         let result = rows
             .iter()
@@ -576,15 +610,17 @@ impl Database for SqliteDatabase {
 
     async fn has_swap(&self, swap_id: Uuid) -> Result<bool> {
         let swap_id = swap_id.to_string();
+        let chain = self.chain.as_str();
 
         let row = sqlx::query!(
             r#"
             SELECT 1 as found
             FROM swap_states
-            WHERE swap_id = ?
+            WHERE swap_id = ? AND chain = ?
             LIMIT 1
             "#,
-            swap_id
+            swap_id,
+            chain
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -604,6 +640,7 @@ impl SqliteDatabase {
     /// `OffsetDateTime::now_utc()`, so dropping the offset is safe.
     pub async fn all_fresh(&self, freshness_hours: u64) -> Result<Vec<(PeerId, Uuid, State)>> {
         let freshness_seconds = (freshness_hours as i64).saturating_mul(3600);
+        let chain = self.chain.as_str();
 
         let rows = sqlx::query!(
             r#"
@@ -611,12 +648,14 @@ impl SqliteDatabase {
             FROM (
                 SELECT max(id) as id, swap_id, state, entered_at
                 FROM swap_states
+                WHERE chain = ?
                 GROUP BY swap_id
             ) s
             INNER JOIN peers p ON s.swap_id = p.swap_id
             WHERE CAST(strftime('%s', substr(s.entered_at, 1, 19)) AS INTEGER)
                   >= CAST(strftime('%s', 'now') AS INTEGER) - ?
             "#,
+            chain,
             freshness_seconds,
         )
         .fetch_all(&self.pool)
@@ -927,7 +966,7 @@ mod tests {
         // keep the directory alive for the duration of the test
         let _db_dir = dir.keep();
 
-        let db = SqliteDatabase::open(temp_db, AccessMode::ReadWrite).await?;
+        let db = SqliteDatabase::open(temp_db, AccessMode::ReadWrite, Chain::Bitcoin).await?;
 
         Ok(db)
     }

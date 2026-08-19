@@ -94,12 +94,13 @@ pub enum AccessMode {
 pub async fn open_db(
     sqlite_path: impl AsRef<Path>,
     access_mode: AccessMode,
+    chain: swap_chain::Chain,
     tauri_handle: impl Into<Option<TauriHandle>>,
 ) -> Result<Arc<SqliteDatabase>> {
     if sqlite_path.as_ref().exists() {
         tracing::debug!("Using existing sqlite database.");
 
-        let sqlite = SqliteDatabase::open(sqlite_path, access_mode)
+        let sqlite = SqliteDatabase::open(sqlite_path, access_mode, chain)
             .await?
             .with_tauri_handle(tauri_handle.into());
 
@@ -109,7 +110,7 @@ pub async fn open_db(
 
         ensure_directory_exists(sqlite_path.as_ref())?;
         tokio::fs::File::create(&sqlite_path).await?;
-        let sqlite = SqliteDatabase::open(sqlite_path, access_mode)
+        let sqlite = SqliteDatabase::open(sqlite_path, access_mode, chain)
             .await?
             .with_tauri_handle(tauri_handle.into());
 
