@@ -1,5 +1,8 @@
 mod bitcoind;
 mod electrs;
+mod fulcrum;
+mod litecoin_rpc;
+mod litecoind;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -70,13 +73,13 @@ pub async fn setup_test<T, F, C>(
 
     let env_config = C::get_config();
 
-    let (monero, containers) = init_containers(&cli).await;
+    let (monero, containers) = init_containers(&cli, env_config.chain).await;
     monero.init_miner().await.unwrap();
 
     let btc_amount = bitcoin::Amount::from_sat(1_000_000);
     let xmr_amount =
         monero::Amount::parse_monero(&(btc_amount.to_btc() / FixedRate::RATE).to_string()).unwrap();
-    let electrs_rpc_port = containers.electrs.get_host_port_ipv4(electrs::RPC_PORT);
+    let electrs_rpc_port = containers.electrum_rpc_port;
 
     let developer_seed = Seed::random().unwrap();
     let developer_starting_balances =
@@ -88,7 +91,7 @@ pub async fn setup_test<T, F, C>(
 
     let (_, developer_tip_monero_wallet) = init_test_wallets(
         "developer_tip",
-        containers.bitcoind_url.clone(),
+        containers.node_url.clone(),
         &monero,
         &containers._monerod_container,
         developer_tip_monero_dir,
@@ -134,9 +137,14 @@ pub async fn setup_test<T, F, C>(
     // and rewrites this file. The values are placeholders — the running ASB
     // never re-consumes most of them (the wallet, swarm and DB were
     // constructed via the test harness, not from this file).
+    let script_chain_section = match env_config.chain {
+        swap_chain::Chain::Bitcoin => "bitcoin",
+        swap_chain::Chain::Litecoin => "litecoin",
+    };
     std::fs::write(
         &alice_config_path,
-        r#"[data]
+        format!(
+            r#"[data]
 dir = "/tmp/alice"
 
 [network]
@@ -144,7 +152,7 @@ listen = []
 rendezvous_point = []
 external_addresses = []
 
-[bitcoin]
+[{script_chain_section}]
 electrum_rpc_urls = ["tcp://localhost:50001"]
 target_block = 1
 finality_confirmations = 1
@@ -163,13 +171,14 @@ hidden_service_num_intro_points = 1
 min_buy_btc = 0.0
 max_buy_btc = 1000.0
 ask_spread = "0"
-"#,
+"#
+        ),
     )
     .unwrap();
     let alice_monero_dir = TempDir::new().unwrap().path().join("alice-monero-wallets");
     let (alice_bitcoin_wallet, alice_monero_wallet) = init_test_wallets(
         MONERO_WALLET_NAME_ALICE,
-        containers.bitcoind_url.clone(),
+        containers.node_url.clone(),
         &monero,
         &containers._monerod_container,
         alice_monero_dir,
@@ -222,7 +231,7 @@ ask_spread = "0"
     let bob_monero_dir = TempDir::new().unwrap().path().join("bob-monero-wallets");
     let (bob_bitcoin_wallet, bob_monero_wallet) = init_test_wallets(
         MONERO_WALLET_NAME_BOB,
-        containers.bitcoind_url.clone(),
+        containers.node_url.clone(),
         &monero,
         &containers._monerod_container,
         bob_monero_dir,
@@ -242,7 +251,7 @@ ask_spread = "0"
         .join("bob-donation-monero-wallets");
     let (_, bob_donation_monero_wallet) = init_test_wallets(
         "bob_donation",
-        containers.bitcoind_url.clone(),
+        containers.node_url.clone(),
         &monero,
         &containers._monerod_container,
         bob_donation_monero_dir,
@@ -297,16 +306,53 @@ ask_spread = "0"
     testfn(test).await.unwrap()
 }
 
-async fn init_containers(cli: &Cli) -> (Monero, Containers<'_>) {
+async fn init_containers(cli: &Cli, chain: swap_chain::Chain) -> (Monero, Containers<'_>) {
     let prefix = random_prefix();
-    let bitcoind_name = format!("{}_{}", prefix, "bitcoind");
-    let (_bitcoind, bitcoind_url, mapped_port) =
-        init_bitcoind_container(cli, prefix.clone(), bitcoind_name.clone(), prefix.clone())
-            .await
-            .expect("could not init bitcoind");
-    let electrs = init_electrs_container(cli, prefix.clone(), bitcoind_name, prefix, mapped_port)
-        .await
-        .expect("could not init electrs");
+
+    let (node_url, electrum_rpc_port, _script_chain) = match chain {
+        swap_chain::Chain::Bitcoin => {
+            let bitcoind_name = format!("{}_{}", prefix, "bitcoind");
+            let (_bitcoind, bitcoind_url, mapped_port) =
+                init_bitcoind_container(cli, prefix.clone(), bitcoind_name.clone(), prefix.clone())
+                    .await
+                    .expect("could not init bitcoind");
+            let electrs =
+                init_electrs_container(cli, prefix.clone(), bitcoind_name, prefix, mapped_port)
+                    .await
+                    .expect("could not init electrs");
+            let electrum_rpc_port = electrs.get_host_port_ipv4(electrs::RPC_PORT);
+
+            (
+                bitcoind_url,
+                electrum_rpc_port,
+                ScriptChainContainers::Bitcoin {
+                    _node: _bitcoind,
+                    _electrum: electrs,
+                },
+            )
+        }
+        swap_chain::Chain::Litecoin => {
+            let litecoind_name = format!("{}_{}", prefix, "litecoind");
+            let (_litecoind, litecoind_url) =
+                init_litecoind_container(cli, litecoind_name.clone(), prefix.clone())
+                    .await
+                    .expect("could not init litecoind");
+            let fulcrum = init_fulcrum_container(cli, litecoind_name, prefix)
+                .await
+                .expect("could not init fulcrum");
+            let electrum_rpc_port = fulcrum.get_host_port_ipv4(fulcrum::TCP_PORT);
+
+            (
+                litecoind_url,
+                electrum_rpc_port,
+                ScriptChainContainers::Litecoin {
+                    _node: _litecoind,
+                    _electrum: fulcrum,
+                },
+            )
+        }
+    };
+
     let (monero, _monerod_container, _monero_wallet_rpc_containers) =
         Monero::new(cli, vec![MONERO_WALLET_NAME_ALICE, MONERO_WALLET_NAME_BOB])
             .await
@@ -315,11 +361,11 @@ async fn init_containers(cli: &Cli) -> (Monero, Containers<'_>) {
     (
         monero,
         Containers {
-            bitcoind_url,
-            _bitcoind,
+            node_url,
+            electrum_rpc_port,
+            _script_chain,
             _monerod_container,
             _monero_wallet_rpc_containers,
-            electrs,
         },
     )
 }
@@ -351,6 +397,49 @@ async fn init_bitcoind_container(
     init_bitcoind(bitcoind_url.clone(), 5).await?;
 
     Ok((docker, bitcoind_url.clone(), bitcoind::RPC_PORT))
+}
+
+async fn init_litecoind_container(
+    cli: &Cli,
+    name: String,
+    network: String,
+) -> Result<(Container<'_, litecoind::Litecoind>, Url)> {
+    let image = RunnableImage::from(litecoind::Litecoind)
+        .with_container_name(name)
+        .with_network(network);
+
+    let docker = cli.run(image);
+    let port = docker.get_host_port_ipv4(litecoind::RPC_PORT);
+
+    let litecoind_url = {
+        let input = format!(
+            "http://{}:{}@localhost:{}",
+            litecoind::RPC_USER,
+            litecoind::RPC_PASSWORD,
+            port
+        );
+        Url::parse(&input).unwrap()
+    };
+
+    litecoin_rpc::init_litecoind(litecoind_url.clone(), 5).await?;
+
+    Ok((docker, litecoind_url))
+}
+
+async fn init_fulcrum_container(
+    cli: &Cli,
+    litecoind_container_name: String,
+    network: String,
+) -> Result<Container<'_, fulcrum::Fulcrum>> {
+    let litecoind_rpc_addr = format!("{}:{}", litecoind_container_name, litecoind::RPC_PORT);
+    let image = fulcrum::Fulcrum::new(litecoind_rpc_addr);
+    let image = RunnableImage::from(image.self_and_args())
+        .with_network(network.clone())
+        .with_container_name(format!("{}_fulcrum", network));
+
+    let docker = cli.run(image);
+
+    Ok(docker)
 }
 
 pub async fn init_electrs_container(
@@ -397,13 +486,9 @@ async fn start_alice(
         tokio::fs::File::create(&db_path).await.unwrap();
     }
     let db = Arc::new(
-        SqliteDatabase::open(
-            db_path.as_path(),
-            AccessMode::ReadWrite,
-            swap_chain::Chain::Bitcoin,
-        )
-        .await
-        .unwrap(),
+        SqliteDatabase::open(db_path.as_path(), AccessMode::ReadWrite, env_config.chain)
+            .await
+            .unwrap(),
     );
 
     let min_buy = bitcoin::Amount::from_sat(u64::MIN);
@@ -551,6 +636,7 @@ async fn init_test_wallets(
 
     let btc_wallet = bitcoin_wallet::WalletBuilder::<Seed>::default()
         .seed(seed.clone())
+        .chain(env_config.chain)
         .network(env_config.bitcoin_network)
         .electrum_rpc_urls(vec![electrum_rpc_url.as_str().to_string()])
         .persister(bitcoin_wallet::PersisterConfig::InMemorySqlite)
@@ -564,12 +650,13 @@ async fn init_test_wallets(
 
     if starting_balances.btc != bitcoin::Amount::ZERO {
         mint(
+            env_config.chain,
             bitcoind_url,
             btc_wallet.new_address().await.unwrap(),
             starting_balances.btc,
         )
         .await
-        .expect("could not mint btc starting balance");
+        .expect("could not mint starting balance");
 
         let mut interval = interval(Duration::from_secs(1u64));
         let mut retries = 0u8;
@@ -691,12 +778,8 @@ impl BobParams {
             tokio::fs::File::create(&self.db_path).await?;
         }
         let db = Arc::new(
-            SqliteDatabase::open(
-                &self.db_path,
-                AccessMode::ReadWrite,
-                swap_chain::Chain::Bitcoin,
-            )
-            .await?,
+            SqliteDatabase::open(&self.db_path, AccessMode::ReadWrite, self.env_config.chain)
+                .await?,
         );
 
         let (event_loop, mut handle) = self.new_eventloop(db.clone()).await?;
@@ -753,12 +836,8 @@ impl BobParams {
             tokio::fs::File::create(&self.db_path).await?;
         }
         let db = Arc::new(
-            SqliteDatabase::open(
-                &self.db_path,
-                AccessMode::ReadWrite,
-                swap_chain::Chain::Bitcoin,
-            )
-            .await?,
+            SqliteDatabase::open(&self.db_path, AccessMode::ReadWrite, self.env_config.chain)
+                .await?,
         );
 
         let (event_loop, mut handle) = self.new_eventloop(db.clone()).await?;
@@ -961,7 +1040,7 @@ impl TestContext {
             let db = SqliteDatabase::open(
                 self.alice_db_path.as_path(),
                 AccessMode::ReadWrite,
-                swap_chain::Chain::Bitcoin,
+                self.env_config.chain,
             )
             .await
             .unwrap();
@@ -1616,35 +1695,74 @@ async fn init_bitcoind(node_url: Url, spendable_quantity: u32) -> Result<Client>
     Ok(bitcoind_client)
 }
 
-/// Send Bitcoin to the specified address, limited to the spendable bitcoin
-/// quantity.
-pub async fn mint(node_url: Url, address: bitcoin::Address, amount: bitcoin::Amount) -> Result<()> {
-    let bitcoind_client = Client::new(node_url.clone());
+/// Send funds of the script chain to the given (shadow) address, limited
+/// to the node wallet's spendable quantity, and confirm the transaction.
+pub async fn mint(
+    chain: swap_chain::Chain,
+    node_url: Url,
+    address: bitcoin::Address,
+    amount: bitcoin::Amount,
+) -> Result<()> {
+    match chain {
+        swap_chain::Chain::Bitcoin => {
+            let bitcoind_client = Client::new(node_url.clone());
 
-    bitcoind_client
-        .send_to_address(BITCOIN_TEST_WALLET_NAME, address.clone(), amount)
-        .await?;
+            bitcoind_client
+                .send_to_address(BITCOIN_TEST_WALLET_NAME, address.clone(), amount)
+                .await?;
 
-    // Confirm the transaction
-    let reward_address = bitcoind_client
-        .with_wallet(BITCOIN_TEST_WALLET_NAME)?
-        .getnewaddress(None, None)
-        .await?;
+            // Confirm the transaction
+            let reward_address = bitcoind_client
+                .with_wallet(BITCOIN_TEST_WALLET_NAME)?
+                .getnewaddress(None, None)
+                .await?;
 
-    let reward_address = reward_address.require_network(bitcoind_client.network().await?)?;
+            let reward_address =
+                reward_address.require_network(bitcoind_client.network().await?)?;
 
-    bitcoind_client.generatetoaddress(1, reward_address).await?;
+            bitcoind_client.generatetoaddress(1, reward_address).await?;
+        }
+        swap_chain::Chain::Litecoin => {
+            let client = litecoin_rpc::Client::new(node_url);
+
+            // litecoind only understands the chain's own encoding
+            let address = swap_chain::ChainAddress::from_script(
+                chain,
+                bitcoin::Network::Regtest,
+                &address.script_pubkey(),
+            )?
+            .to_string();
+
+            client.send_to_address(&address, amount).await?;
+
+            // Confirm the transaction
+            let reward_address = client.new_legacy_address().await?;
+            client.generate_to_address(1, &reward_address).await?;
+        }
+    }
 
     Ok(())
 }
 
 // This is just to keep the containers alive
 struct Containers<'a> {
-    bitcoind_url: Url,
-    _bitcoind: Container<'a, bitcoind::Bitcoind>,
+    node_url: Url,
+    electrum_rpc_port: u16,
+    _script_chain: ScriptChainContainers<'a>,
     _monerod_container: Container<'a, image::Monerod>,
     _monero_wallet_rpc_containers: Vec<Container<'a, image::MoneroWalletRpc>>,
-    electrs: Container<'a, electrs::Electrs>,
+}
+
+/// The script-chain node and its electrum server, per chain.
+enum ScriptChainContainers<'a> {
+    Bitcoin {
+        _node: Container<'a, bitcoind::Bitcoind>,
+        _electrum: Container<'a, electrs::Electrs>,
+    },
+    Litecoin {
+        _node: Container<'a, litecoind::Litecoind>,
+        _electrum: Container<'a, fulcrum::Fulcrum>,
+    },
 }
 
 pub mod alice_run_until {
@@ -1789,6 +1907,43 @@ impl GetConfig for SlowAmnestyConfig {
             // In regtest, each BTC block is ~5s, so 100 blocks is ~8 minutes
             bitcoin_remaining_refund_timelock: 100,
             ..env::Regtest::get_config()
+        }
+    }
+}
+
+/// Litecoin twins of the configs above: same regtest timelocks, but the
+/// whole harness (containers, wallets, database, protocols) runs on the
+/// Litecoin chain.
+pub struct LtcSlowCancelConfig;
+
+impl GetConfig for LtcSlowCancelConfig {
+    fn get_config() -> Config {
+        Config {
+            bitcoin_cancel_timelock: CancelTimelock::new(180).into(),
+            ..env::LitecoinRegtest::get_config()
+        }
+    }
+}
+
+pub struct LtcFastCancelConfig;
+
+impl GetConfig for LtcFastCancelConfig {
+    fn get_config() -> Config {
+        Config {
+            bitcoin_cancel_timelock: CancelTimelock::new(10).into(),
+            ..env::LitecoinRegtest::get_config()
+        }
+    }
+}
+
+pub struct LtcFastPunishConfig;
+
+impl GetConfig for LtcFastPunishConfig {
+    fn get_config() -> Config {
+        Config {
+            bitcoin_cancel_timelock: CancelTimelock::new(10).into(),
+            bitcoin_punish_timelock: PunishTimelock::new(10).into(),
+            ..env::LitecoinRegtest::get_config()
         }
     }
 }

@@ -265,14 +265,36 @@ reuse the existing validity/spread guards.
 
 ### M5 — Integration tests (docker)
 
-- [ ] Research + pin images: litecoind (e.g. `uphold/litecoin-core`)
-      and an LTC-capable electrum server
-      (Fulcrum recommended; `vulpemventures/electrs` is BTC-only).
-- [ ] Harness: parameterize `swap/tests/harness` by chain
-      (containers, HRP, fallbackfee flag, generate-blocks).
-- [ ] Tests: `happy_path_ltc`, refund path, punish path, early-refund path
-      (start with these four; extend to the amnesty family after).
-- [ ] `justfile` targets + CI matrix entries.
+- [x] Images: `uphold/litecoin-core:0.21` (fork of Bitcoin Core 0.21,
+      same flags and RPC as the `coblox/bitcoin-core` image) and
+      `cculianu/fulcrum:latest` with `--coin=LTC`
+      (`vulpemventures/electrs` is BTC-only).
+- [x] Harness parameterized by the test config's chain: `setup_test`
+      derives everything from `env_config.chain` — containers
+      (litecoind + Fulcrum instead of bitcoind + electrs), wallet
+      (`WalletBuilder::chain`), database chain tag, Alice's config-file
+      section, and minting. litecoind talks through a small raw
+      JSON-RPC client (`harness/litecoin_rpc.rs`) because the
+      `bitcoin-harness` client parses every address as
+      `bitcoin::Address`, which rejects `rltc1…`; mining rewards use
+      legacy base58 addresses (Litecoin regtest shares Bitcoin's
+      testnet version bytes) and minting converts the wallet's shadow
+      address to its `rltc1…` form.
+- [x] Tests: `ltc_happy_path`, `ltc_refund_using_cancel_and_refund_command`,
+      `ltc_punish` (extend to early-refund/amnesty after these are green).
+- [x] `just docker_test <name>` and `just list-docker-tests` pick the
+      new tests up automatically (file-based).
+- [ ] **Run the suite** (needs docker, not available in this container):
+      `just docker_test ltc_happy_path`, then the refund and punish
+      tests, plus `just docker_test happy_path` for BTC non-regression.
+      First-run checkpoints: the two images must pull (if the
+      `uphold/litecoin-core:0.21` tag is missing, try `0.21.3` or
+      `latest` in `harness/litecoind.rs`), and Fulcrum's readiness is
+      matched on the stdout line containing "Service started" — if the
+      harness hangs at container startup, check
+      `docker logs <prefix>_fulcrum` and adjust that wait string in
+      `harness/fulcrum.rs`.
+- [ ] CI matrix entries.
 - [ ] Gate (AI_POLICY): full LTC docker suite green + BTC suite unchanged.
 
 ### M6 — Ops and finish
