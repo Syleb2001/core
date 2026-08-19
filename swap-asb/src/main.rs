@@ -393,6 +393,17 @@ pub async fn main() -> Result<()> {
                 };
 
             let bitcoin_wallet = Arc::new(bitcoin_wallet);
+
+            // The event loop operates on the shadow representation of the
+            // configured chain; validate_config already proved this converts.
+            let external_redeem_address = config
+                .maker
+                .external_bitcoin_redeem_address
+                .as_ref()
+                .map(|address| address.to_shadow(env_config.chain, env_config.bitcoin_network))
+                .transpose()
+                .context("Invalid maker.external_bitcoin_redeem_address")?;
+
             let (event_loop, mut swap_receiver, event_loop_service) = EventLoop::new(
                 swarm,
                 metrics,
@@ -403,7 +414,7 @@ pub async fn main() -> Result<()> {
                 kraken_rate.clone(),
                 config.maker.min_buy_btc,
                 config.maker.max_buy_btc,
-                config.maker.external_bitcoin_redeem_address,
+                external_redeem_address,
                 config.maker.btc_redeem_fee_multiplier,
                 tip_config,
                 hermes_funding_policy,
@@ -455,16 +466,17 @@ pub async fn main() -> Result<()> {
                 open_db(db_file, AccessMode::ReadOnly, env_config.chain, None).await?;
             let mut table = Table::new();
 
+            let ticker = env_config.chain.params().ticker;
             table.set_header(vec![
-                "Swap ID",
-                "Start Date",
-                "State",
-                "Bitcoin Lock TxId",
-                "BTC Amount",
-                "XMR Amount",
-                "Exchange Rate",
-                "Taker Peer ID",
-                "Completed",
+                "Swap ID".to_string(),
+                "Start Date".to_string(),
+                "State".to_string(),
+                format!("{ticker} Lock TxId"),
+                format!("{ticker} Amount"),
+                "XMR Amount".to_string(),
+                "Exchange Rate".to_string(),
+                "Taker Peer ID".to_string(),
+                "Completed".to_string(),
             ]);
 
             let all_swaps = db.all().await?;
@@ -477,7 +489,7 @@ pub async fn main() -> Result<()> {
                     continue;
                 }
 
-                match SwapDetails::from_db_state(swap_id, state, &db).await {
+                match SwapDetails::from_db_state(swap_id, state, &db, ticker).await {
                     Ok(details) => {
                         if json {
                             details.log_info();
@@ -821,6 +833,7 @@ impl SwapDetails {
         swap_id: Uuid,
         latest_state: AliceState,
         db: &Arc<dyn Database + Send + Sync>,
+        ticker: &str,
     ) -> Result<Self> {
         let completed = is_complete(&latest_state);
 
@@ -833,7 +846,7 @@ impl SwapDetails {
             })
             .context("Failed to get \"BtcLockTransactionSeen\" state")?;
 
-        let exchange_rate = Self::calculate_exchange_rate(state3.btc, state3.xmr)?;
+        let exchange_rate = Self::calculate_exchange_rate(state3.btc, state3.xmr, ticker)?;
         let start_date = db.get_swap_start_date(swap_id).await?;
         let btc_lock_txid = state3.tx_lock.txid();
         let peer_id = db.get_peer_id(swap_id).await?;
@@ -851,7 +864,11 @@ impl SwapDetails {
         })
     }
 
-    fn calculate_exchange_rate(btc: bitcoin::Amount, xmr: monero::Amount) -> Result<String> {
+    fn calculate_exchange_rate(
+        btc: bitcoin::Amount,
+        xmr: monero::Amount,
+        ticker: &str,
+    ) -> Result<String> {
         let btc_decimal = Decimal::from_f64(btc.to_btc())
             .ok_or_else(|| anyhow::anyhow!("Failed to convert BTC amount to Decimal"))?;
         let xmr_decimal = Decimal::new(xmr.as_pico().try_into()?, monero::Amount::XMR_SCALE);
@@ -860,7 +877,7 @@ impl SwapDetails {
             .checked_div(xmr_decimal)
             .ok_or_else(|| anyhow::anyhow!("Division by zero or overflow"))?;
 
-        Ok(format!("{} XMR/BTC", rate.round_dp(8)))
+        Ok(format!("{} XMR/{ticker}", rate.round_dp(8)))
     }
 
     fn to_table_row(&self) -> Vec<String> {

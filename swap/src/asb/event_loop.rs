@@ -1079,7 +1079,7 @@ where
     // TODO: lock file for the whole thing
     async fn handle_set_external_bitcoin_redeem_address(
         &mut self,
-        address: Option<bitcoin::Address>,
+        address: Option<swap_env::ExternalAddress>,
     ) -> Result<()> {
         let current = tokio::fs::read_to_string(&self.config_path)
             .await
@@ -1114,16 +1114,25 @@ where
                     .maker
                     .external_bitcoin_redeem_address
                     .as_ref()
-                    .map(bitcoin::Address::to_string)
+                    .map(|address| address.to_string())
                     .unwrap_or("None".into()),
                 address
                     .as_ref()
-                    .map(bitcoin::Address::to_string)
+                    .map(|address| address.to_string())
                     .unwrap_or("None".into()),
             );
         }
 
-        self.external_redeem_address = reloaded.maker.external_bitcoin_redeem_address;
+        // The state machines operate on the shadow representation
+        self.external_redeem_address = reloaded
+            .maker
+            .external_bitcoin_redeem_address
+            .as_ref()
+            .map(|address| {
+                address.to_shadow(self.env_config.chain, self.env_config.bitcoin_network)
+            })
+            .transpose()
+            .context("Reloaded external redeem address is not usable with the configured chain")?;
 
         tracing::info!(
             address = ?self.external_redeem_address.as_ref().map(|a| a.to_string()),
@@ -1493,7 +1502,7 @@ mod service {
             respond_to: oneshot::Sender<Result<Arc<BidQuote>, Arc<anyhow::Error>>>,
         },
         SetExternalBitcoinRedeemAddress {
-            address: Option<bitcoin::Address>,
+            address: Option<swap_env::ExternalAddress>,
             respond_to: oneshot::Sender<Result<(), anyhow::Error>>,
         },
         GetExternalBitcoinRedeemAddress {
@@ -1619,7 +1628,7 @@ mod service {
 
         pub async fn set_external_bitcoin_redeem_address(
             &self,
-            address: bitcoin::Address,
+            address: swap_env::ExternalAddress,
         ) -> anyhow::Result<()> {
             let (tx, rx) = oneshot::channel();
             self.sender

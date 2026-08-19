@@ -10815,6 +10815,7 @@ dependencies = [
  "rand 0.8.5",
  "rust_decimal",
  "serde",
+ "serde_json",
  "sha2",
  "swap-chain",
  "swap-fs",

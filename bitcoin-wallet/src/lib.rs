@@ -67,6 +67,11 @@ pub trait BitcoinWallet: Send + Sync {
 
     fn network(&self) -> Network;
 
+    /// The script chain this wallet operates on. [`Self::network`] and
+    /// every address exposed by the trait stay in the chain's shadow
+    /// (rust-bitcoin) representation.
+    fn chain(&self) -> swap_chain::Chain;
+
     fn finality_confirmations(&self) -> u32;
 
     async fn wallet_export(&self, role: &str) -> Result<FullyNodedExport>;

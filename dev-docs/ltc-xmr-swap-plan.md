@@ -253,12 +253,15 @@ reuse the existing validity/spread guards.
       at runtime: Bitcoin keeps its historical behavior (any address
       type on the right network, base58 included), Litecoin accepts
       its bech32 form and maps it to the shadow address.
-- [ ] RPC/controller: `set_external_bitcoin_redeem_address` and the
-      config's `external_bitcoin_redeem_address` still parse with the
-      Bitcoin-only serde — a Litecoin ASB cannot set an external
-      redeem address yet.
-- [ ] Neutralize `AmountExt::max_bitcoin_for_price` and the
-      "XMR/BTC" display labels in `swap-asb` (cosmetic).
+- [x] `external_bitcoin_redeem_address` accepts an address of the
+      configured chain: the config keeps the user's original string
+      (`swap_env::ExternalAddress`), `validate_config` proves it
+      converts, and the RPC set/get pair parses and displays the
+      chain's own form while the event loop keeps operating on the
+      shadow representation.
+- [x] Chain-aware labels in the `asb history` table and exchange-rate
+      display. (`max_bitcoin_for_price` needs no change: its
+      arithmetic is denomination-neutral.)
 
 ### M5 — Integration tests (docker)
 

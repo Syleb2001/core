@@ -211,9 +211,11 @@ pub struct Maker {
     /// to all feeds (Kraken, Bitfinex, KuCoin, Exolix).
     #[serde(default = "default_price_ticker_validity_duration_secs")]
     pub price_ticker_validity_duration_secs: u64,
-    /// If specified, Bitcoin received from successful swaps will be sent to this address.
-    #[serde(default, with = "swap_serde::bitcoin::address_serde::option")]
-    pub external_bitcoin_redeem_address: Option<bitcoin::Address>,
+    /// If specified, funds received from successful swaps will be sent to
+    /// this address instead of staying in the internal wallet. Must be an
+    /// address of the configured script chain.
+    #[serde(default)]
+    pub external_bitcoin_redeem_address: Option<crate::external_address::ExternalAddress>,
     /// Multiplier applied to the estimated BTC redeem fee. Defaults to 1.0;
     /// set higher (e.g. 2.0) to overpay for faster confirmation as a safety
     /// margin against fee estimation undershooting actual mempool conditions.
@@ -402,6 +404,13 @@ pub fn validate_config(config: &Config, env_config: crate::env::Config) -> Resul
             env_config.bitcoin_network,
             script_chain.network
         );
+    }
+    if let Some(address) = &config.maker.external_bitcoin_redeem_address {
+        address
+            .to_shadow(chain, env_config.bitcoin_network)
+            .context(
+                "maker.external_bitcoin_redeem_address is not usable with the configured chain",
+            )?;
     }
 
     let ratio = config.maker.refund_policy.anti_spam_deposit_ratio;

@@ -386,10 +386,12 @@ impl AsbApiServer for RpcImpl {
         &self,
         address: String,
     ) -> Result<(), ErrorObjectOwned> {
-        let network = self.bitcoin_wallet.network();
-        let address =
-            bitcoin_wallet::bitcoin_address::parse_and_validate_network(&address, network)
-                .into_json_rpc_result()?;
+        let address: swap_env::ExternalAddress = address.parse().into_json_rpc_result()?;
+
+        // Reject addresses of the wrong chain or network before persisting
+        address
+            .to_shadow(self.bitcoin_wallet.chain(), self.bitcoin_wallet.network())
+            .into_json_rpc_result()?;
 
         self.event_loop_service
             .set_external_bitcoin_redeem_address(address)
@@ -417,9 +419,24 @@ impl AsbApiServer for RpcImpl {
             .await
             .into_json_rpc_result()?;
 
-        Ok(ExternalBitcoinRedeemAddressResponse {
-            address: address.map(|a| a.to_string()),
-        })
+        // The event loop stores the shadow representation; report the
+        // address in the form of the configured chain.
+        let chain = self.bitcoin_wallet.chain();
+        let address = address
+            .map(|address| match chain {
+                swap_chain::Chain::Bitcoin => Ok(address.to_string()),
+                chain => swap_chain::ChainAddress::from_script(
+                    chain,
+                    self.bitcoin_wallet.network(),
+                    &address.script_pubkey(),
+                )
+                .map(|address| address.to_string()),
+            })
+            .transpose()
+            .map_err(anyhow::Error::from)
+            .into_json_rpc_result()?;
+
+        Ok(ExternalBitcoinRedeemAddressResponse { address })
     }
 
     async fn get_current_quote(&self) -> Result<QuoteResponse, ErrorObjectOwned> {

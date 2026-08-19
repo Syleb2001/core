@@ -2337,6 +2337,10 @@ impl BitcoinWallet for Wallet {
         self.network
     }
 
+    fn chain(&self) -> swap_chain::Chain {
+        self.chain
+    }
+
     fn finality_confirmations(&self) -> u32 {
         self.finality_confirmations
     }
@@ -3161,6 +3165,10 @@ impl BitcoinWallet for Wallet<Connection, StaticFeeRate> {
 
     fn network(&self) -> Network {
         unimplemented!("stub method called erroneously")
+    }
+
+    fn chain(&self) -> swap_chain::Chain {
+        self.chain
     }
 
     fn finality_confirmations(&self) -> u32 {
