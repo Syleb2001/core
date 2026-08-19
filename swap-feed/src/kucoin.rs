@@ -14,7 +14,18 @@ use url::Url;
 /// See: https://www.kucoin.com/docs-new/websocket-api/base-info/get-public-token-spot-margin
 /// See: https://www.kucoin.com/docs-new/websocket-api/base-info/introduction
 /// See: https://www.kucoin.com/docs-new/3470063w0?lang=en_US
-pub fn connect(price_ticker_rest_url_kucoin: Url, client: reqwest::Client) -> Result<PriceUpdates> {
+pub fn connect(
+    price_ticker_rest_url_kucoin: Url,
+    client: reqwest::Client,
+    chain: swap_chain::Chain,
+) -> Result<PriceUpdates> {
+    if chain != swap_chain::Chain::Bitcoin {
+        anyhow::bail!(
+            "The KuCoin feed only supports the XMR/BTC pair; \
+             disable it for a {chain} ASB (price_ticker_source_kucoin_enabled = false)"
+        );
+    }
+
     crate::ticker::connect(
         "KuCoin",
         (price_ticker_rest_url_kucoin, client),

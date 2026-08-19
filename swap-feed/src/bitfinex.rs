@@ -14,7 +14,17 @@ use url::Url;
 /// price ticker protocol version 2
 /// See: https://docs.bitfinex.com/docs/ws-public
 /// See: https://docs.bitfinex.com/reference/ws-public-ticker
-pub fn connect(price_ticker_ws_url_bitfinex: Url) -> Result<PriceUpdates> {
+pub fn connect(
+    price_ticker_ws_url_bitfinex: Url,
+    chain: swap_chain::Chain,
+) -> Result<PriceUpdates> {
+    if chain != swap_chain::Chain::Bitcoin {
+        anyhow::bail!(
+            "The Bitfinex feed only supports the XMR/BTC pair; \
+             disable it for a {chain} ASB (price_ticker_source_bitfinex_enabled = false)"
+        );
+    }
+
     crate::ticker::connect("Bitfinex", price_ticker_ws_url_bitfinex, connection::new)
 }
 

@@ -10837,6 +10837,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "swap-chain",
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite",

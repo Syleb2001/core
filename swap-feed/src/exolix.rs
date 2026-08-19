@@ -15,6 +15,7 @@ pub fn connect(
     api_key: String,
     poll_interval: Duration,
     client: reqwest::Client,
+    chain: swap_chain::Chain,
 ) -> Result<PriceUpdates> {
     crate::ticker::connect(
         "Exolix",
@@ -23,6 +24,7 @@ pub fn connect(
             api_key,
             poll_interval,
             client,
+            chain,
         },
         connection::new,
     )
@@ -38,6 +40,7 @@ pub struct ExolixParams {
     pub api_key: String,
     pub poll_interval: Duration,
     pub client: reqwest::Client,
+    pub chain: swap_chain::Chain,
 }
 
 pub(crate) mod connection {
@@ -105,7 +108,7 @@ pub(crate) mod connection {
     }
 
     async fn fetch_rate(params: &ExolixParams) -> Result<wire::PriceUpdate, FetchError> {
-        let request_body = wire::RateRequest::btc_to_xmr();
+        let request_body = wire::RateRequest::to_xmr(params.chain);
 
         let request = params
             .client
@@ -171,17 +174,19 @@ pub mod wire {
     }
 
     impl RateRequest {
-        /// Request the BTC -> XMR fixed rate for a 1 XMR withdrawal amount.
+        /// Request the script-chain -> XMR fixed rate for a 1 XMR
+        /// withdrawal amount.
         ///
         /// We pin the destination side (XMR) at 1 so the response's
-        /// `fromAmount` is exactly the BTC required to receive 1 XMR.
-        /// Quoting in the opposite direction (XMR -> BTC with a send
-        /// amount) yields a different rate because Exolix prices each
-        /// direction independently.
-        pub fn btc_to_xmr() -> Self {
+        /// `fromAmount` is exactly the amount of the script chain's asset
+        /// required to receive 1 XMR. Quoting in the opposite direction
+        /// (XMR -> BTC with a send amount) yields a different rate because
+        /// Exolix prices each direction independently.
+        pub fn to_xmr(chain: swap_chain::Chain) -> Self {
+            let ticker = chain.params().ticker;
             Self {
-                coin_from: "BTC".to_string(),
-                network_from: "BTC".to_string(),
+                coin_from: ticker.to_string(),
+                network_from: ticker.to_string(),
                 coin_to: "XMR".to_string(),
                 network_to: "XMR".to_string(),
                 withdrawal_amount: Decimal::ONE,

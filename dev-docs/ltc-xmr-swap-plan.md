@@ -233,20 +233,27 @@ reuse the existing validity/spread guards.
 
 ### M4 — ASB event loop, feed, DB
 
-- [ ] `swap-feed`: cross-rate legs per provider
-      (parse the bid side for LTC/BTC), Exolix direct pair;
-      freshness = both legs fresh; keep 10% inter-exchange guard;
-      `FixedRate` equivalent for tests.
+- [x] `swap-feed`: Kraken serves the XMR/LTC cross rate
+      (dual XMR/XBT + LTC/XBT subscription; ask ÷ bid, integer litoshi
+      math, emitted only while both legs are < 10 min old) and Exolix
+      quotes LTC→XMR directly. Bitfinex and KuCoin refuse to start for
+      a Litecoin ASB with an explicit config hint — adding their cross
+      legs is follow-up work, not silent mispricing. `FixedRate`
+      unchanged (already chain-neutral).
+- [x] DB migration: `swap_states.chain` (default `'bitcoin'`);
+      the database opens for one chain — inserts tag it, listings and
+      the resume path only see it, loading a foreign-chain swap fails
+      with an explicit error.
 - [ ] Event loop: quotes, wallet snapshot (9 fee estimates), anti-spam policy —
       logic unchanged, amounts now denominate LTC;
-      min/max enforcement in `swap_setup/alice.rs` unchanged.
-- [ ] DB migration: `ALTER TABLE swap_states ADD COLUMN chain TEXT NOT NULL DEFAULT 'bitcoin'`;
-      tag inserts with the process chain;
-      refuse resuming a swap whose chain ≠ process chain (clear error).
+      min/max enforcement in `swap_setup/alice.rs` unchanged (verify).
 - [ ] Swap runner (`protocol::alice::run` / `bob::run`):
       should need no logic change — verify timelock/fee paths use env config only.
-- [ ] Controller/RPC + tauri layer: keep compiling
-      (single-pair process keeps existing endpoints; naming cleanup later).
+- [ ] Controller/RPC + tauri layer: chain-aware address validation for
+      `WithdrawBtc`/`set_external_bitcoin_redeem_address`
+      (until then a Litecoin ASB cannot withdraw via CLI/RPC);
+      neutralize `AmountExt::max_bitcoin_for_price` and the
+      "XMR/BTC" display labels in `swap-asb`.
 
 ### M5 — Integration tests (docker)
 

@@ -22,6 +22,7 @@ async fn main() -> Result<()> {
         api_key,
         std::time::Duration::from_secs(10),
         reqwest::Client::new(),
+        swap_chain::Chain::Bitcoin,
     )
     .context("Failed to connect to Exolix")?;
 

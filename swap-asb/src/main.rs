@@ -228,6 +228,7 @@ pub async fn main() -> Result<()> {
             let kraken_price_updates = if config.maker.price_ticker_source_kraken_enabled {
                 Some(swap_feed::connect_kraken(
                     config.maker.price_ticker_ws_url_kraken.clone(),
+                    env_config.chain,
                 )?)
             } else {
                 None
@@ -235,6 +236,7 @@ pub async fn main() -> Result<()> {
             let bitfinex_price_updates = if config.maker.price_ticker_source_bitfinex_enabled {
                 Some(swap_feed::connect_bitfinex(
                     config.maker.price_ticker_ws_url_bitfinex.clone(),
+                    env_config.chain,
                 )?)
             } else {
                 None
@@ -243,6 +245,7 @@ pub async fn main() -> Result<()> {
                 Some(swap_feed::connect_kucoin(
                     config.maker.price_ticker_rest_url_kucoin.clone(),
                     reqwest::Client::new(),
+                    env_config.chain,
                 )?)
             } else {
                 None
@@ -260,6 +263,7 @@ pub async fn main() -> Result<()> {
                         api_key.clone(),
                         exolix_poll_interval,
                         reqwest::Client::new(),
+                        env_config.chain,
                     )
                 })
                 .transpose()?;

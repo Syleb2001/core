@@ -13,19 +13,26 @@ pub use traits::LatestRate;
 mod ticker;
 
 // Core functions
-pub fn connect_kraken(url: url::Url) -> anyhow::Result<kraken::PriceUpdates> {
-    kraken::connect(url)
+pub fn connect_kraken(
+    url: url::Url,
+    chain: swap_chain::Chain,
+) -> anyhow::Result<kraken::PriceUpdates> {
+    kraken::connect(url, chain)
 }
 
-pub fn connect_bitfinex(url: url::Url) -> anyhow::Result<bitfinex::PriceUpdates> {
-    bitfinex::connect(url)
+pub fn connect_bitfinex(
+    url: url::Url,
+    chain: swap_chain::Chain,
+) -> anyhow::Result<bitfinex::PriceUpdates> {
+    bitfinex::connect(url, chain)
 }
 
 pub fn connect_kucoin(
     url: url::Url,
     client: reqwest::Client,
+    chain: swap_chain::Chain,
 ) -> anyhow::Result<kucoin::PriceUpdates> {
-    kucoin::connect(url, client)
+    kucoin::connect(url, client, chain)
 }
 
 pub fn connect_exolix(
@@ -33,6 +40,7 @@ pub fn connect_exolix(
     api_key: String,
     poll_interval: std::time::Duration,
     client: reqwest::Client,
+    chain: swap_chain::Chain,
 ) -> anyhow::Result<exolix::PriceUpdates> {
-    exolix::connect(url, api_key, poll_interval, client)
+    exolix::connect(url, api_key, poll_interval, client, chain)
 }
