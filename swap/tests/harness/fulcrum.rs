@@ -62,7 +62,8 @@ impl IntoIterator for FulcrumArgs {
     fn into_iter(self) -> <Self as IntoIterator>::IntoIter {
         let args = vec![
             "Fulcrum".to_string(),
-            "--coin=LTC".to_string(),
+            // No coin flag: `coin` only exists as a config-file key, and
+            // Fulcrum auto-detects Litecoin by querying the daemon
             format!("--bitcoind={}", self.litecoind_rpc_addr),
             format!("--rpcuser={}", litecoind::RPC_USER),
             format!("--rpcpassword={}", litecoind::RPC_PASSWORD),
