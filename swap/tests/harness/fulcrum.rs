@@ -66,7 +66,9 @@ impl IntoIterator for FulcrumArgs {
             format!("--rpcuser={}", litecoind::RPC_USER),
             format!("--rpcpassword={}", litecoind::RPC_PASSWORD),
             format!("--tcp=0.0.0.0:{}", TCP_PORT),
-            "--datadir=/tmp/fulcrum-db".to_string(),
+            // The image's designated data volume; Fulcrum refuses to
+            // start when the datadir does not exist
+            "--datadir=/data".to_string(),
         ];
 
         args.into_iter()
