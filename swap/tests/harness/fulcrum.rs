@@ -38,8 +38,9 @@ impl Image for Fulcrum {
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
-        // Printed once the electrum TCP listener accepts connections
-        vec![WaitFor::message_on_stdout("Service started")]
+        // Printed once the electrum TCP listener accepts connections.
+        // Fulcrum logs through Qt, which writes to stderr.
+        vec![WaitFor::message_on_stderr("Service started")]
     }
 
     // Make sure the electrum port is mapped even if the image's
@@ -66,9 +67,9 @@ impl IntoIterator for FulcrumArgs {
             format!("--rpcuser={}", litecoind::RPC_USER),
             format!("--rpcpassword={}", litecoind::RPC_PASSWORD),
             format!("--tcp=0.0.0.0:{}", TCP_PORT),
-            // The image's designated data volume; Fulcrum refuses to
-            // start when the datadir does not exist
-            "--datadir=/data".to_string(),
+            // No --datadir here: the image's entrypoint appends
+            // `-D /data` (plus the SSL cert pair) on its own when the
+            // command starts with `Fulcrum`
         ];
 
         args.into_iter()
