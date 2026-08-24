@@ -62,6 +62,22 @@ impl Client {
         Ok(body["result"].clone())
     }
 
+    /// Wait until litecoind answers RPC calls: the container's readiness
+    /// log line can precede the RPC server accepting connections.
+    pub async fn wait_until_ready(&self) -> Result<()> {
+        let mut last_error = None;
+        for _ in 0..60 {
+            match self.call(None, "getblockchaininfo", json!([])).await {
+                Ok(_) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        Err(last_error.expect("at least one attempt was made"))
+            .context("litecoind did not become ready in time")
+    }
+
     pub async fn create_wallet(&self, name: &str) -> Result<()> {
         self.call(None, "createwallet", json!([name])).await?;
         Ok(())
@@ -105,6 +121,7 @@ impl Client {
 pub async fn init_litecoind(node_url: Url, spendable_quantity: u32) -> Result<Client> {
     let client = Client::new(node_url);
 
+    client.wait_until_ready().await?;
     client.create_wallet(WALLET_NAME).await?;
 
     let reward_address = client.new_legacy_address().await?;
