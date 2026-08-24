@@ -41,6 +41,12 @@ impl Image for Fulcrum {
         // Printed once the electrum TCP listener accepts connections
         vec![WaitFor::message_on_stdout("Service started")]
     }
+
+    // Make sure the electrum port is mapped even if the image's
+    // Dockerfile does not EXPOSE it
+    fn expose_ports(&self) -> Vec<u16> {
+        vec![TCP_PORT]
+    }
 }
 
 #[derive(Debug, Clone)]

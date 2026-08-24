@@ -28,6 +28,12 @@ impl Image for Litecoind {
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![WaitFor::message_on_stdout("init message: Done loading")]
     }
+
+    // Unlike the bitcoind image, this one does not EXPOSE the regtest
+    // RPC port in its Dockerfile, so testcontainers would not map it
+    fn expose_ports(&self) -> Vec<u16> {
+        vec![RPC_PORT]
+    }
 }
 
 #[derive(Debug, Clone, Default)]
