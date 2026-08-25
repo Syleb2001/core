@@ -599,6 +599,9 @@ impl Wallet {
         let mut wallet =
             bdk_wallet::Wallet::create(external_descriptor.clone(), internal_descriptor.clone())
                 .network(network)
+                // Anchor the local chain on the script chain's genesis;
+                // the shadow network alone would anchor on Bitcoin's
+                .genesis_hash(chain.genesis_hash(network))
                 .create_wallet_no_persist()
                 .context("Failed to create persisterless wallet")?;
 
@@ -643,6 +646,7 @@ impl Wallet {
         // Create a new (persisted) wallet
         let mut wallet = bdk_wallet::Wallet::create(external_descriptor, internal_descriptor)
             .network(network)
+            .genesis_hash(chain.genesis_hash(network))
             .create_wallet(&mut persister)
             .context("Failed to create wallet with persister")?;
 

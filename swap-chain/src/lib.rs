@@ -46,6 +46,10 @@ pub struct ChainParams {
     pub fee_api_base_url: Option<&'static str>,
     /// Base URL of the block explorer used for user-facing transaction links.
     pub explorer_base_url: &'static str,
+    /// Genesis block hashes in display order, as the nodes print them.
+    pub genesis_mainnet: &'static str,
+    pub genesis_testnet: &'static str,
+    pub genesis_regtest: &'static str,
 }
 
 pub const BITCOIN: ChainParams = ChainParams {
@@ -57,6 +61,9 @@ pub const BITCOIN: ChainParams = ChainParams {
     bech32_hrp_regtest: "bcrt",
     fee_api_base_url: Some("https://mempool.space"),
     explorer_base_url: "https://mempool.space",
+    genesis_mainnet: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+    genesis_testnet: "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943",
+    genesis_regtest: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
 };
 
 pub const LITECOIN: ChainParams = ChainParams {
@@ -69,6 +76,10 @@ pub const LITECOIN: ChainParams = ChainParams {
     // litecoinspace.org runs the mempool.space codebase with the same API.
     fee_api_base_url: Some("https://litecoinspace.org"),
     explorer_base_url: "https://litecoinspace.org",
+    // From litecoin's chainparams.cpp assertions (testnet is testnet4)
+    genesis_mainnet: "12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2",
+    genesis_testnet: "4966625a4b2851d9fdee139e56211a0d88575f59ed816ff5e6a63deb4e3e29a0",
+    genesis_regtest: "530827f38f93b43ed12af0b3ad25a288dc02ed74d6d7857862df51fc56c416f9",
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -94,6 +105,22 @@ impl Chain {
             bitcoin::Network::Regtest => params.bech32_hrp_regtest,
             _ => params.bech32_hrp_testnet,
         }
+    }
+
+    /// The chain's genesis block hash on the given (shadow) network.
+    ///
+    /// A fresh BDK wallet anchors its local chain on this hash; derived
+    /// from the shadow network alone it would anchor on Bitcoin's
+    /// genesis and never find an agreement block with an electrum
+    /// server of another chain.
+    pub fn genesis_hash(self, network: bitcoin::Network) -> bitcoin::BlockHash {
+        let params = self.params();
+        let hex = match network {
+            bitcoin::Network::Bitcoin => params.genesis_mainnet,
+            bitcoin::Network::Regtest => params.genesis_regtest,
+            _ => params.genesis_testnet,
+        };
+        hex.parse().expect("genesis hash constants are valid")
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -166,5 +193,40 @@ mod tests {
             assert_eq!(chain.to_string().parse::<Chain>().unwrap(), chain);
         }
         assert!("dogecoin".parse::<Chain>().is_err());
+    }
+}
+
+#[cfg(test)]
+mod genesis_tests {
+    use super::*;
+
+    #[test]
+    fn bitcoin_genesis_hashes_match_rust_bitcoin() {
+        for network in [
+            bitcoin::Network::Bitcoin,
+            bitcoin::Network::Testnet,
+            bitcoin::Network::Regtest,
+        ] {
+            assert_eq!(
+                Chain::Bitcoin.genesis_hash(network),
+                bitcoin::constants::genesis_block(network).block_hash(),
+            );
+        }
+    }
+
+    #[test]
+    fn litecoin_genesis_hashes_are_pinned() {
+        assert_eq!(
+            Chain::Litecoin
+                .genesis_hash(bitcoin::Network::Regtest)
+                .to_string(),
+            "530827f38f93b43ed12af0b3ad25a288dc02ed74d6d7857862df51fc56c416f9"
+        );
+        assert_eq!(
+            Chain::Litecoin
+                .genesis_hash(bitcoin::Network::Bitcoin)
+                .to_string(),
+            "12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2"
+        );
     }
 }
