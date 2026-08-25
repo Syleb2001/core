@@ -2103,14 +2103,11 @@ impl Client {
             })
             .await?;
 
-        // If the fee rate is less than 0, return an error
         // The Electrum server returns a value <= 0 if it cannot estimate the fee rate.
         // See: https://github.com/romanz/electrs/blob/ed0ef2ee22efb45fcf0c7f3876fd746913008de3/src/electrum.rs#L239-L245
         //      https://github.com/romanz/electrs/blob/ed0ef2ee22efb45fcf0c7f3876fd746913008de3/src/electrum.rs#L31
         if btc_per_kvb <= 0.0 {
-            return Err(anyhow!(
-                "Fee rate returned by Electrum server is less than 0"
-            ));
+            return Err(anyhow::Error::new(NoFeeEstimate));
         }
 
         // Convert to sat / kB without ever constructing an Amount from the float
@@ -2152,11 +2149,9 @@ impl Client {
         // Parse the histogram as array of [fee, vsize] pairs
         let histogram: Vec<(f64, u64)> = serde_json::from_value(fee_histogram)?;
 
-        // If the histogram is empty, we return an error
+        // An empty histogram means an empty mempool: no data to estimate from
         if histogram.is_empty() {
-            return Err(anyhow!(
-                "The mempool seems to be empty therefore we cannot estimate the fee rate from the histogram"
-            ));
+            return Err(anyhow::Error::new(NoFeeEstimate));
         }
 
         // Sort the histogram by fee rate
@@ -2221,6 +2216,13 @@ impl Client {
         Ok(fee_rate)
     }
 }
+
+/// The server answered but has no fee estimate to offer -- the normal
+/// state of fresh regtest or testnet chains -- as opposed to the server
+/// being unreachable or failing.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("the Electrum server has no fee estimate available")]
+struct NoFeeEstimate;
 
 /// Returns true if the error is a server response indicating that the
 /// requested transaction does not exist (as opposed to the server failing
@@ -2395,6 +2397,22 @@ impl EstimateFeeRate for Client {
             }
             // If both the histogram and conservative fee rate fail, we return an error
             (Err(electrum_conservative_fee_rate_error), Err(electrum_histogram_fee_rate_error)) => {
+                // Both sources answering "no data" is the normal state of a
+                // fresh regtest/testnet chain (Fulcrum relays the daemon's
+                // honest -1 where electrs invents an estimate). The server's
+                // relay floor is real network data, so use that; genuine
+                // failures keep propagating.
+                if electrum_conservative_fee_rate_error.is::<NoFeeEstimate>()
+                    && electrum_histogram_fee_rate_error.is::<NoFeeEstimate>()
+                {
+                    let min_relay_fee = Client::min_relay_fee(self).await?;
+                    tracing::info!(
+                        min_relay_fee_sat_vb = min_relay_fee.to_sat_per_vb_ceil(),
+                        "Electrum has no fee estimate for this chain yet, using the server's minimum relay fee"
+                    );
+                    return Ok(min_relay_fee);
+                }
+
                 Err(electrum_conservative_fee_rate_error
                     .context(electrum_histogram_fee_rate_error)
                     .context("Failed to fetch both the conservative and histogram fee rates from Electrum"))
