@@ -284,16 +284,22 @@ reuse the existing validity/spread guards.
       `ltc_punish` (extend to early-refund/amnesty after these are green).
 - [x] `just docker_test <name>` and `just list-docker-tests` pick the
       new tests up automatically (file-based).
-- [ ] **Run the suite** (needs docker, not available in this container):
-      `just docker_test ltc_happy_path`, then the refund and punish
-      tests, plus `just docker_test happy_path` for BTC non-regression.
-      First-run checkpoints: the two images must pull (if the
-      `uphold/litecoin-core:0.21` tag is missing, try `0.21.3` or
-      `latest` in `harness/litecoind.rs`), and Fulcrum's readiness is
-      matched on the stdout line containing "Service started" — if the
-      harness hangs at container startup, check
-      `docker logs <prefix>_fulcrum` and adjust that wait string in
-      `harness/fulcrum.rs`.
+- [x] **`ltc_happy_path` GREEN** (2026-08-25, on a real server): the
+      first end-to-end XMR↔LTC atomic swap — LTC locked and redeemed,
+      XMR locked and redeemed, all state machines and the adaptor
+      signature protocol running on Litecoin. `happy_path` (BTC) green
+      on the same harness beforehand. Shaking out the first run took
+      five fixes, all committed: litecoind RPC readiness polling, the
+      image not EXPOSE-ing the regtest RPC port, Fulcrum's entrypoint
+      appending its own datadir/cert flags (`coin` is config-file-only;
+      auto-detection works), `-txindex=1` (Fulcrum requires it), BDK
+      genesis anchoring (a fresh wallet anchored on Bitcoin's genesis
+      finds no agreement block with a Litecoin server), and the fee
+      estimator falling back to the server's relay floor when both
+      Electrum legs honestly answer "no data" (Fulcrum relays
+      litecoind's -1 where esplora electrs invents an estimate).
+- [ ] Refund + punish LTC runs, and a BTC `happy_path` re-run after
+      the fee-estimator change (shared code path).
 - [ ] CI matrix entries.
 - [ ] Gate (AI_POLICY): full LTC docker suite green + BTC suite unchanged.
 
