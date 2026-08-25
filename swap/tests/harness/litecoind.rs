@@ -55,6 +55,9 @@ impl IntoIterator for LitecoindArgs {
             format!("-rpcpassword={}", RPC_PASSWORD),
             "-printtoconsole".to_string(),
             "-fallbackfee=0.0002".to_string(),
+            // Fulcrum reads transactions over RPC and refuses to serve
+            // without a transaction index on the daemon
+            "-txindex=1".to_string(),
             format!("-rpcport={}", RPC_PORT),
             format!("-port={}", PORT),
             "-rest".to_string(),

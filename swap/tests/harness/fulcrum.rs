@@ -38,9 +38,9 @@ impl Image for Fulcrum {
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
-        // Printed once the electrum TCP listener accepts connections.
-        // Fulcrum logs through Qt, which writes to stderr.
-        vec![WaitFor::message_on_stderr("Service started")]
+        // Printed on stdout once the electrum TCP listener accepts
+        // connections (verified against the container's actual logs)
+        vec![WaitFor::message_on_stdout("Service started")]
     }
 
     // Make sure the electrum port is mapped even if the image's
