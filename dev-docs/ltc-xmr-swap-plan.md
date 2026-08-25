@@ -298,10 +298,14 @@ reuse the existing validity/spread guards.
       estimator falling back to the server's relay floor when both
       Electrum legs honestly answer "no data" (Fulcrum relays
       litecoind's -1 where esplora electrs invents an estimate).
-- [ ] Refund + punish LTC runs, and a BTC `happy_path` re-run after
-      the fee-estimator change (shared code path).
+- [x] **Full suite GREEN** (2026-08-25): `ltc_refund_using_cancel_and_refund_command`
+      (163s) and `ltc_punish` (203s, including the cooperative redeem
+      after punishment) both passed, and the BTC `happy_path` re-ran
+      green (199s) after the fee-estimator change. All three protocol
+      pillars — swap, refund, punish — proven on Litecoin on a real
+      server.
 - [ ] CI matrix entries.
-- [ ] Gate (AI_POLICY): full LTC docker suite green + BTC suite unchanged.
+- [x] Gate: LTC happy/refund/punish green + BTC `happy_path` unchanged.
 
 ### M6 — Ops and finish
 
