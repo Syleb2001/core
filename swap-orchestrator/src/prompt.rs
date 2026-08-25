@@ -16,24 +16,44 @@ pub enum MoneroNodeType {
 }
 
 pub enum ElectrumServerType {
-    Included,         // Run a Bitcoin node and Electrum server
+    Included,         // Run a script-chain node and Electrum server
     Remote(Vec<Url>), // Use a specific remote Electrum server
 }
 
-pub fn network() -> (bitcoin::Network, monero_address::Network) {
+pub fn network() -> (swap_chain::Chain, bitcoin::Network, monero_address::Network) {
     let network = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Which network do you want to run on?")
         .items(&[
             "Mainnet Bitcoin & Mainnet Monero",
             "Testnet Bitcoin & Stagenet Monero",
+            "Mainnet Litecoin & Mainnet Monero",
+            "Testnet Litecoin & Stagenet Monero",
         ])
         .default(0)
         .interact()
         .expect("Failed to select network");
 
     match network {
-        0 => (bitcoin::Network::Bitcoin, monero_address::Network::Mainnet),
-        1 => (bitcoin::Network::Testnet, monero_address::Network::Stagenet),
+        0 => (
+            swap_chain::Chain::Bitcoin,
+            bitcoin::Network::Bitcoin,
+            monero_address::Network::Mainnet,
+        ),
+        1 => (
+            swap_chain::Chain::Bitcoin,
+            bitcoin::Network::Testnet,
+            monero_address::Network::Stagenet,
+        ),
+        2 => (
+            swap_chain::Chain::Litecoin,
+            bitcoin::Network::Bitcoin,
+            monero_address::Network::Mainnet,
+        ),
+        3 => (
+            swap_chain::Chain::Litecoin,
+            bitcoin::Network::Testnet,
+            monero_address::Network::Stagenet,
+        ),
         _ => unreachable!(),
     }
 }
@@ -96,13 +116,24 @@ pub fn monero_node_type() -> MoneroNodeType {
     }
 }
 
-pub fn electrum_server_type(default_electrum_urls: &Vec<Url>) -> ElectrumServerType {
-    let electrum_server_type = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("How do you want to connect to the Bitcoin network?")
-        .items(&[
+pub fn electrum_server_type(
+    chain: swap_chain::Chain,
+    default_electrum_urls: &Vec<Url>,
+) -> ElectrumServerType {
+    let (prompt_text, included_text) = match chain {
+        swap_chain::Chain::Bitcoin => (
+            "How do you want to connect to the Bitcoin network?",
             "Run a full Bitcoin node & Electrum server",
-            "List of remote Electrum servers",
-        ])
+        ),
+        swap_chain::Chain::Litecoin => (
+            "How do you want to connect to the Litecoin network?",
+            "Run a full Litecoin node & Fulcrum server",
+        ),
+    };
+
+    let electrum_server_type = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(prompt_text)
+        .items(&[included_text, "List of remote Electrum servers"])
         .default(0)
         .interact()
         .expect("Failed to select electrum server type");

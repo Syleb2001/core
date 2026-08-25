@@ -32,6 +32,9 @@ pub const BITCOIN_EXPORTER_METRICS_PORT: u16 = 9332;
 pub const ELECTRS_MONITORING_PORT: u16 = 4224;
 
 pub struct OrchestratorInput {
+    /// The script chain this deployment serves (decides which node and
+    /// electrum-server containers are generated).
+    pub chain: swap_chain::Chain,
     pub ports: OrchestratorPorts,
     pub networks: OrchestratorNetworks<monero_address::Network, bitcoin::Network>,
     pub images: OrchestratorImages<OrchestratorImage>,
@@ -106,6 +109,8 @@ pub struct OrchestratorImages<T: IntoImageAttribute> {
     pub monerod: T,
     pub electrs: T,
     pub bitcoind: T,
+    pub litecoind: T,
+    pub fulcrum: T,
     pub tor: T,
     pub asb: T,
     pub asb_controller: T,
@@ -129,6 +134,27 @@ pub struct OrchestratorPorts {
     pub asb_rpc_port: u16,
     pub asb_metrics_port: u16,
     pub rendezvous_node_port: u16,
+}
+
+impl OrchestratorPorts {
+    /// The well-known ports for a deployment of the given script chain.
+    /// The `bitcoind_*` fields keep their historical names and hold the
+    /// litecoind ports on a Litecoin deployment.
+    pub fn for_chain(
+        chain: swap_chain::Chain,
+        networks: OrchestratorNetworks<monero_address::Network, bitcoin::Network>,
+    ) -> Self {
+        let mut ports: OrchestratorPorts = networks.into();
+        if chain == swap_chain::Chain::Litecoin {
+            let (rpc, p2p) = match ports.bitcoind_rpc {
+                8332 => (9332, 9333), // litecoind mainnet
+                _ => (19332, 19335),  // litecoind testnet4
+            };
+            ports.bitcoind_rpc = rpc;
+            ports.bitcoind_p2p = p2p;
+        }
+        ports
+    }
 }
 
 impl From<OrchestratorNetworks<monero_address::Network, bitcoin::Network>> for OrchestratorPorts {
@@ -229,9 +255,10 @@ fn build(input: OrchestratorInput) -> String {
     // The name is prefixed to the container names
     // See: https://docs.docker.com/compose/how-tos/project-name/#set-a-project-name
     let project_name = format!(
-        "{}_monero_{}_bitcoin",
+        "{}_monero_{}_{}",
         input.networks.monero.to_display(),
-        input.networks.bitcoin.to_display()
+        input.networks.bitcoin.to_display(),
+        input.chain.as_str()
     );
 
     let asb_config_path = PathBuf::from(ASB_DATA_DIR).join(ASB_CONFIG_FILE);
@@ -283,39 +310,176 @@ fn build(input: OrchestratorInput) -> String {
         .is_some()
         .then(|| generate_bitcoind_rpcauth("metrics"));
 
-    let mut command_bitcoind = command![
-        "bitcoind",
-        input.networks.bitcoin.to_flag(),
-        flag!("-rpcallowip=0.0.0.0/0"),
-        flag!("-rpcbind=0.0.0.0:{}", input.ports.bitcoind_rpc),
-        flag!("-bind=0.0.0.0:{}", input.ports.bitcoind_p2p),
-        flag!("-datadir=/bitcoind-data/"),
-        flag!(input.want_tor; "-proxy=tor:{}", input.ports.tor_socks),
-        flag!("-dbcache=16384"),
-        // These are required for electrs
-        // See: See: https://github.com/romanz/electrs/blob/master/doc/config.md#bitcoind-configuration
-        flag!("-server=1"),
-        flag!("-prune=0"),
-        flag!("-txindex=1"),
-    ];
+    // The script-chain node and its electrum server, per chain. The segment
+    // carries its own service indentation and is inserted at column 0.
+    let (script_chain_segment, script_chain_volumes, node_service, electrum_service) = match input
+        .chain
+    {
+        swap_chain::Chain::Bitcoin => {
+            let mut command_bitcoind = command![
+                "bitcoind",
+                input.networks.bitcoin.to_flag(),
+                flag!("-rpcallowip=0.0.0.0/0"),
+                flag!("-rpcbind=0.0.0.0:{}", input.ports.bitcoind_rpc),
+                flag!("-bind=0.0.0.0:{}", input.ports.bitcoind_p2p),
+                flag!("-datadir=/bitcoind-data/"),
+                flag!(input.want_tor; "-proxy=tor:{}", input.ports.tor_socks),
+                flag!("-dbcache=16384"),
+                // These are required for electrs
+                // See: https://github.com/romanz/electrs/blob/master/doc/config.md#bitcoind-configuration
+                flag!("-server=1"),
+                flag!("-prune=0"),
+                flag!("-txindex=1"),
+            ];
 
-    if let Some((rpcauth, _)) = bitcoind_metrics_auth.as_ref() {
-        command_bitcoind.0.push(flag!("-rpcauth={}", rpcauth));
-    }
+            if let Some((rpcauth, _)) = bitcoind_metrics_auth.as_ref() {
+                command_bitcoind.0.push(flag!("-rpcauth={}", rpcauth));
+            }
 
-    let electrs_network: containers::electrs::Network = input.networks.clone().into();
+            let electrs_network: containers::electrs::Network = input.networks.clone().into();
 
-    let command_electrs = command![
-        "electrs",
-        electrs_network.to_flag(),
-        flag!("--daemon-dir=/bitcoind-data/"),
-        flag!("--db-dir=/electrs-data/db"),
-        flag!("--daemon-rpc-addr=bitcoind:{}", input.ports.bitcoind_rpc),
-        flag!("--daemon-p2p-addr=bitcoind:{}", input.ports.bitcoind_p2p),
-        flag!("--electrum-rpc-addr=0.0.0.0:{}", input.ports.electrs),
-        flag!(input.metrics.is_some(); "--monitoring-addr=0.0.0.0:{}", ELECTRS_MONITORING_PORT),
-        flag!("--log-filters=INFO"),
-    ];
+            let command_electrs = command![
+                "electrs",
+                electrs_network.to_flag(),
+                flag!("--daemon-dir=/bitcoind-data/"),
+                flag!("--db-dir=/electrs-data/db"),
+                flag!("--daemon-rpc-addr=bitcoind:{}", input.ports.bitcoind_rpc),
+                flag!("--daemon-p2p-addr=bitcoind:{}", input.ports.bitcoind_p2p),
+                flag!("--electrum-rpc-addr=0.0.0.0:{}", input.ports.electrs),
+                flag!(input.metrics.is_some(); "--monitoring-addr=0.0.0.0:{}", ELECTRS_MONITORING_PORT),
+                flag!("--log-filters=INFO"),
+            ];
+
+            let electrs_monitoring_expose = if input.metrics.is_some() {
+                format!("\n      - {ELECTRS_MONITORING_PORT}")
+            } else {
+                String::new()
+            };
+
+            let segment = format!(
+                "\
+  bitcoind:
+    container_name: bitcoind
+    {image_bitcoind}
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - 'bitcoind-data:/bitcoind-data/'
+    expose:
+      - {port_bitcoind_rpc}
+      - {port_bitcoind_p2p}
+    user: root
+    entrypoint: ''
+    command: {command_bitcoind}
+  electrs:
+    container_name: electrs
+    {image_electrs}
+    restart: unless-stopped
+    logging: *default-logging
+    user: root
+    depends_on:
+      - bitcoind
+    volumes:
+      - 'bitcoind-data:/bitcoind-data'
+      - 'electrs-data:/electrs-data'
+    expose:
+      - {electrs_port}{electrs_monitoring_expose}
+    entrypoint: ''
+    command: {command_electrs}",
+                image_bitcoind = input.images.bitcoind.to_image_attribute(),
+                image_electrs = input.images.electrs.to_image_attribute(),
+                port_bitcoind_rpc = input.ports.bitcoind_rpc,
+                port_bitcoind_p2p = input.ports.bitcoind_p2p,
+                electrs_port = input.ports.electrs,
+            );
+
+            (
+                segment,
+                "bitcoind-data:\n  electrs-data:",
+                "bitcoind",
+                "electrs",
+            )
+        }
+        swap_chain::Chain::Litecoin => {
+            let mut command_litecoind = command![
+                "litecoind",
+                input.networks.bitcoin.to_flag(),
+                flag!("-rpcallowip=0.0.0.0/0"),
+                flag!("-rpcbind=0.0.0.0:{}", input.ports.bitcoind_rpc),
+                flag!("-bind=0.0.0.0:{}", input.ports.bitcoind_p2p),
+                flag!("-datadir=/litecoind-data/"),
+                flag!(input.want_tor; "-proxy=tor:{}", input.ports.tor_socks),
+                flag!("-dbcache=8192"),
+                flag!("-server=1"),
+                flag!("-prune=0"),
+                // Fulcrum reads transactions over RPC and refuses to serve
+                // without a transaction index on the daemon
+                flag!("-txindex=1"),
+            ];
+
+            if let Some((rpcauth, _)) = bitcoind_metrics_auth.as_ref() {
+                command_litecoind.0.push(flag!("-rpcauth={}", rpcauth));
+            }
+
+            // litecoind writes its RPC cookie into the network subdirectory
+            let cookie_path = match input.networks.bitcoin {
+                bitcoin::Network::Bitcoin => "/litecoind-data/.cookie",
+                _ => "/litecoind-data/testnet4/.cookie",
+            };
+
+            let command_fulcrum = command![
+                "Fulcrum",
+                flag!("--bitcoind=litecoind:{}", input.ports.bitcoind_rpc),
+                flag!("--rpccookie={}", cookie_path),
+                flag!("--tcp=0.0.0.0:{}", input.ports.electrs),
+                flag!("--datadir=/fulcrum-data"),
+            ];
+
+            let segment = format!(
+                "\
+  litecoind:
+    container_name: litecoind
+    {image_litecoind}
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - 'litecoind-data:/litecoind-data/'
+    expose:
+      - {port_litecoind_rpc}
+      - {port_litecoind_p2p}
+    user: root
+    entrypoint: ''
+    command: {command_litecoind}
+  fulcrum:
+    container_name: fulcrum
+    {image_fulcrum}
+    restart: unless-stopped
+    logging: *default-logging
+    user: root
+    depends_on:
+      - litecoind
+    volumes:
+      - 'litecoind-data:/litecoind-data:ro'
+      - 'fulcrum-data:/fulcrum-data'
+    expose:
+      - {electrs_port}
+    entrypoint: ''
+    command: {command_fulcrum}",
+                image_litecoind = input.images.litecoind.to_image_attribute(),
+                image_fulcrum = input.images.fulcrum.to_image_attribute(),
+                port_litecoind_rpc = input.ports.bitcoind_rpc,
+                port_litecoind_p2p = input.ports.bitcoind_p2p,
+                electrs_port = input.ports.electrs,
+            );
+
+            (
+                segment,
+                "litecoind-data:\n  fulcrum-data:",
+                "litecoind",
+                "fulcrum",
+            )
+        }
+    };
 
     let command_asb_controller = command![
         "asb-controller",
@@ -431,9 +595,9 @@ fn build(input: OrchestratorInput) -> String {
     restart: unless-stopped
     logging: *default-logging
     depends_on:
-      - bitcoind
+      - {node_service}
     environment:
-      - BITCOIN_RPC_HOST=bitcoind
+      - BITCOIN_RPC_HOST={node_service}
       - BITCOIN_RPC_PORT={bitcoind_rpc}
       - BITCOIN_RPC_USER=metrics
       - BITCOIN_RPC_PASSWORD={exporter_password}
@@ -471,6 +635,7 @@ fn build(input: OrchestratorInput) -> String {
     command: [\"--config.file=/etc/prometheus/prometheus.yml\", \"--agent\", \"--storage.agent.path=/prometheus\"]\
 ",
             image_bitcoin_exporter = input.images.bitcoin_exporter.to_image_attribute(),
+            node_service = node_service,
             image_cadvisor = input.images.cadvisor.to_image_attribute(),
             image_prometheus_agent = input.images.prometheus_agent.to_image_attribute(),
             prometheus_config_file = PROMETHEUS_CONFIG_FILE,
@@ -514,12 +679,6 @@ fn build(input: OrchestratorInput) -> String {
         (String::new(), "")
     };
 
-    let electrs_monitoring_expose = if input.metrics.is_some() {
-        format!("\n      - {ELECTRS_MONITORING_PORT}")
-    } else {
-        String::new()
-    };
-
     let compose_str = format!(
         "\
 # This file was auto-generated by `orchestrator` on {date}
@@ -558,34 +717,7 @@ services:
       - {port_monerod_rpc}
     entrypoint: ''
     command: {command_monerod}
-  bitcoind:
-    container_name: bitcoind
-    {image_bitcoind}
-    restart: unless-stopped
-    logging: *default-logging
-    volumes:
-      - 'bitcoind-data:/bitcoind-data/'
-    expose:
-      - {port_bitcoind_rpc}
-      - {port_bitcoind_p2p}
-    user: root
-    entrypoint: ''
-    command: {command_bitcoind}
-  electrs:
-    container_name: electrs
-    {image_electrs}
-    restart: unless-stopped
-    logging: *default-logging
-    user: root
-    depends_on:
-      - bitcoind
-    volumes:
-      - 'bitcoind-data:/bitcoind-data'
-      - 'electrs-data:/electrs-data'
-    expose:
-      - {electrs_port}{electrs_monitoring_expose}
-    entrypoint: ''
-    command: {command_electrs}
+  {script_chain_segment}
   {tor_segment}
   {cloudflared_segment}
   {promtail_segment}
@@ -602,7 +734,7 @@ services:
     ulimits:
       nofile: 524288
     depends_on:
-      - electrs
+      - {electrum_service}
     volumes:
       - '{asb_config_path_on_host}:{asb_config_path_inside_container}'
       # makes `docker compose up` fail if the keyfile is missing
@@ -652,8 +784,7 @@ services:
     command: {command_rendezvous_node}
 volumes:
   monerod-data:
-  bitcoind-data:
-  electrs-data:
+  {script_chain_volumes}
   asb-data:
   rendezvous-data:
   {tor_volume}
@@ -663,15 +794,9 @@ volumes:
         log_max_size = DOCKER_LOG_MAX_SIZE,
         log_max_file = DOCKER_LOG_MAX_FILE,
         port_monerod_rpc = input.ports.monerod_rpc,
-        port_bitcoind_rpc = input.ports.bitcoind_rpc,
-        port_bitcoind_p2p = input.ports.bitcoind_p2p,
-        electrs_port = input.ports.electrs,
-        electrs_monitoring_expose = electrs_monitoring_expose,
         asb_libp2p_port = input.ports.asb_libp2p,
         rendezvous_node_port = input.ports.rendezvous_node_port,
         image_monerod = input.images.monerod.to_image_attribute(),
-        image_electrs = input.images.electrs.to_image_attribute(),
-        image_bitcoind = input.images.bitcoind.to_image_attribute(),
         image_asb = input.images.asb.to_image_attribute(),
         image_asb_controller = input.images.asb_controller.to_image_attribute(),
         image_asb_tracing_logger = input.images.asb_tracing_logger.to_image_attribute(),
@@ -764,7 +889,7 @@ scrape_configs:
         refresh_interval: 5s
     relabel_configs:
       - source_labels: [__meta_docker_container_name]
-        regex: '/?(bitcoind|monerod|electrs)'
+        regex: '/?(bitcoind|monerod|electrs|litecoind|fulcrum)'
         action: keep
       - source_labels: [__meta_docker_container_name]
         regex: '/?(.*)'
@@ -781,13 +906,15 @@ scrape_configs:
     )
 }
 
-/// Builds `prometheus.yml`. Always scrapes cadvisor, the ASB's libp2p endpoint,
-/// the bitcoin-exporter and electrs; also scrapes cloudflared when
-/// `scrape_cloudflared` is set.
+/// Builds `prometheus.yml`. Always scrapes cadvisor, the ASB's libp2p endpoint
+/// and the bitcoin-exporter; scrapes electrs when `scrape_electrs` is set
+/// (Bitcoin deployments only -- Fulcrum has no Prometheus endpoint) and
+/// cloudflared when `scrape_cloudflared` is set.
 pub fn build_prometheus_agent_yml(
     cfg: &MetricsConfig,
     asb_metrics_port: u16,
     scrape_cloudflared: bool,
+    scrape_electrs: bool,
 ) -> String {
     fn yaml_single_quote(value: &str) -> String {
         format!("'{}'", value.replace('\'', "''"))
@@ -799,6 +926,17 @@ pub fn build_prometheus_agent_yml(
   - job_name: cloudflared
     static_configs:
       - targets: ['cloudflared:{CLOUDFLARED_METRICS_PORT}']"
+        )
+    } else {
+        String::new()
+    };
+
+    let electrs_scrape = if scrape_electrs {
+        format!(
+            "
+  - job_name: electrs
+    static_configs:
+      - targets: ['electrs:{ELECTRS_MONITORING_PORT}']"
         )
     } else {
         String::new()
@@ -820,10 +958,7 @@ scrape_configs:
       - targets: ['asb:{asb_metrics_port}']
   - job_name: bitcoind
     static_configs:
-      - targets: ['bitcoin-exporter:{bitcoin_exporter_metrics_port}']
-  - job_name: electrs
-    static_configs:
-      - targets: ['electrs:{electrs_monitoring_port}']{cloudflared_scrape}
+      - targets: ['bitcoin-exporter:{bitcoin_exporter_metrics_port}']{electrs_scrape}{cloudflared_scrape}
 
 remote_write:
   - url: {url}
@@ -831,7 +966,6 @@ remote_write:
 ",
         instance = yaml_single_quote(&cfg.instance),
         bitcoin_exporter_metrics_port = BITCOIN_EXPORTER_METRICS_PORT,
-        electrs_monitoring_port = ELECTRS_MONITORING_PORT,
         url = yaml_single_quote(&cfg.remote_write_url),
         token = yaml_single_quote(&cfg.token),
     )

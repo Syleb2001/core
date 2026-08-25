@@ -25,6 +25,16 @@ pub static ELECTRS_IMAGE: &str =
 pub static BITCOIND_IMAGE: &str =
     "getumbrel/bitcoind@sha256:c565266ea302c9ab2fc490f04ff14e584210cde3d0d991b8309157e5dfae9e8d";
 
+/// litecoind 0.21 (https://hub.docker.com/r/uphold/litecoin-core, tag 0.21)
+pub static LITECOIND_IMAGE: &str =
+    "uphold/litecoin-core@sha256:46ebcaa617f66f3f35be4d7c2fe46bb07f037fd9f4482c4e1d1b044997d30b1c";
+
+/// Fulcrum (https://hub.docker.com/r/cculianu/fulcrum, latest at pin time).
+/// Serves the electrum protocol for Litecoin; the esplora electrs used on
+/// the Bitcoin side does not speak Litecoin.
+pub static FULCRUM_IMAGE: &str =
+    "cculianu/fulcrum@sha256:309a158c1355a95c5c10251fa4b819de1a5706fa3188f886e346716b9e2382ca";
+
 /// tor 0.4.8.14 (https://hub.docker.com/layers/thetorproject/obfs4-bridge/latest/images/sha256-e67af1e273f36ace109d68ee2d5ae137f31a2642fd9ca37a4494765c01f6d886)
 pub static TOR_IMAGE: &str = "thetorproject/obfs4-bridge@sha256:f86a942414716db7b5e6268191729838669130b1f6ef23067073d80be3b19fd1";
 

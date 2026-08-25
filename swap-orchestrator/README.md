@@ -131,6 +131,21 @@ The `orchestrator` generates a `docker-compose.yml` file that includes the follo
 - `electrs`: Electrum server.
 - `monerod`: Monero node.
 
+### Litecoin deployments
+
+The network prompt also offers **Litecoin** (mainnet or testnet). A Litecoin
+deployment serves the XMR↔LTC pair instead of XMR↔BTC: the generated stack
+replaces `bitcoind` + `electrs` with
+
+- `litecoind`: Litecoin node (`-txindex=1`, which Fulcrum requires).
+- `fulcrum`: [Fulcrum](https://github.com/cculianu/Fulcrum) Electrum server,
+  authenticating against litecoind's RPC cookie.
+
+and the generated `config.toml` carries a `[litecoin]` section instead of
+`[bitcoin]`. Everything else (Monero node, controller, Tor, log/metrics
+shipping) works the same. One ASB process serves exactly one pair — run a
+second deployment in another directory to serve both BTC and LTC.
+
 <img width="1364" height="709" alt="image" src="https://github.com/user-attachments/assets/cdc47e64-7ffb-4da9-811a-d020b1b20bd2" />
 
 ## Why Docker?

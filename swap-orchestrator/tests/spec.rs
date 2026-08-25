@@ -13,8 +13,25 @@ fn make_input(
     promtail: Option<PromtailConfig>,
     metrics: Option<MetricsConfig>,
 ) -> OrchestratorInput {
+    make_input_for_chain(
+        swap_chain::Chain::Bitcoin,
+        want_tor,
+        cloudflared,
+        promtail,
+        metrics,
+    )
+}
+
+fn make_input_for_chain(
+    chain: swap_chain::Chain,
+    want_tor: bool,
+    cloudflared: Option<CloudflaredConfig>,
+    promtail: Option<PromtailConfig>,
+    metrics: Option<MetricsConfig>,
+) -> OrchestratorInput {
     let source_build_context = images::source_build_context(None);
     OrchestratorInput {
+        chain,
         ports: OrchestratorPorts {
             monerod_rpc: 38081,
             bitcoind_rpc: 18332,
@@ -34,6 +51,8 @@ fn make_input(
             monerod: OrchestratorImage::Registry(images::MONEROD_IMAGE.to_string()),
             electrs: OrchestratorImage::Registry(images::ELECTRS_IMAGE.to_string()),
             bitcoind: OrchestratorImage::Registry(images::BITCOIND_IMAGE.to_string()),
+            litecoind: OrchestratorImage::Registry(images::LITECOIND_IMAGE.to_string()),
+            fulcrum: OrchestratorImage::Registry(images::FULCRUM_IMAGE.to_string()),
             tor: OrchestratorImage::Registry(images::TOR_IMAGE.to_string()),
             rendezvous_node: OrchestratorImage::Build(images::rendezvous_node_image_from_source(
                 &source_build_context,
@@ -248,7 +267,7 @@ fn test_promtail_yml_ships_node_container_logs() {
 
 #[test]
 fn test_prometheus_agent_yml_is_valid_and_wired() {
-    let yml = build_prometheus_agent_yml(&sample_metrics_config(), 9945, false);
+    let yml = build_prometheus_agent_yml(&sample_metrics_config(), 9945, false, true);
     let parsed: serde_yaml::Value =
         serde_yaml::from_str(&yml).expect("prometheus.yml must be valid YAML");
 
@@ -302,7 +321,7 @@ fn test_prometheus_agent_yml_is_valid_and_wired() {
 
 #[test]
 fn test_prometheus_agent_scrapes_cloudflared_when_enabled() {
-    let yml = build_prometheus_agent_yml(&sample_metrics_config(), 9945, true);
+    let yml = build_prometheus_agent_yml(&sample_metrics_config(), 9945, true, true);
     let parsed: serde_yaml::Value =
         serde_yaml::from_str(&yml).expect("prometheus.yml must be valid YAML");
 
@@ -324,4 +343,44 @@ fn test_asb_publishes_libp2p_port() {
     assert!(spec.contains("- '0.0.0.0:9839:9839'"));
     assert!(spec.contains("http://asb:9944"));
     assert!(spec.contains("net.ipv4.tcp_tw_reuse=1"));
+}
+
+#[test]
+fn test_litecoin_spec_generation() {
+    let compose =
+        make_input_for_chain(swap_chain::Chain::Litecoin, false, None, None, None).to_spec();
+
+    // The Litecoin stack replaces bitcoind + electrs with litecoind + Fulcrum
+    assert!(compose.contains("container_name: litecoind"));
+    assert!(compose.contains("container_name: fulcrum"));
+    assert!(!compose.contains("container_name: bitcoind"));
+    assert!(!compose.contains("container_name: electrs"));
+
+    // Fulcrum requires a transaction index and authenticates via the cookie
+    assert!(compose.contains("-txindex=1"));
+    assert!(compose.contains("--rpccookie=/litecoind-data/testnet4/.cookie"));
+    assert!(compose.contains("--bitcoind=litecoind:"));
+
+    // The asb waits for the electrum server of its chain
+    assert!(compose.contains("fulcrum-data:"));
+    assert!(compose.contains("litecoind-data:"));
+    assert!(!compose.contains("bitcoind-data:"));
+
+    // The project name carries the chain
+    assert!(compose.contains("name: stagenet_monero_testnet_litecoin"));
+
+    // A Litecoin deployment with metrics gets the exporter pointed at litecoind
+    // and no electrs scrape config
+    let metrics_compose = make_input_for_chain(
+        swap_chain::Chain::Litecoin,
+        false,
+        None,
+        Some(sample_promtail_config()),
+        Some(sample_metrics_config()),
+    )
+    .to_spec();
+    assert!(metrics_compose.contains("BITCOIN_RPC_HOST=litecoind"));
+
+    let yml = build_prometheus_agent_yml(&sample_metrics_config(), 9945, false, false);
+    assert!(!yml.contains("job_name: electrs"));
 }

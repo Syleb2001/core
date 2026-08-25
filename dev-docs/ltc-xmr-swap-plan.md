@@ -309,9 +309,32 @@ reuse the existing validity/spread guards.
 
 ### M6 — Ops and finish
 
-- [ ] `swap-orchestrator`: litecoind/electrum container definitions + compose.
-- [ ] Docs: ASB README section, changelog entry.
-- [ ] Real-world dry run on LTC testnet (testnet4) end to end.
+- [x] `swap-orchestrator` generates Litecoin deployments: the network
+      prompt offers Mainnet/Testnet Litecoin, and the compose then
+      carries `litecoind` (pinned `uphold/litecoin-core`, `-txindex=1`)
+      plus `fulcrum` (pinned `cculianu/fulcrum`, cookie auth against
+      litecoind, `--datadir` on its own volume) instead of
+      `bitcoind`/`electrs`; the generated `config.toml` gets the
+      `[litecoin]` section, the metrics exporter follows the node
+      service, the electrs Prometheus scrape is Bitcoin-only, and
+      promtail also discovers the new containers. Covered by
+      `tests/spec.rs::test_litecoin_spec_generation`.
+- [x] Docs: orchestrator README section on Litecoin deployments.
+- [ ] **Testnet dry run** (operator steps, needs a server):
+      1. `./orchestrator` → "Testnet Litecoin & Stagenet Monero" →
+         include the nodes → `gen-rpc-auth` → `docker compose up -d`.
+      2. Wait for litecoind (testnet4, a few GB) and monerod
+         (stagenet) to sync; Fulcrum restarts until the cookie
+         exists, then indexes.
+      3. `docker compose attach asb-controller` → `bitcoin-balance` /
+         `monero-address`; fund via a tLTC faucet and a stagenet XMR
+         faucet.
+      4. Success criteria: ASB starts (chain-aware protocols
+         `/comit/ltc/*`), serves a quote (Kraken cross-rate feed), and
+         the wallet sees the faucet deposit through Fulcrum.
+      A full testnet swap additionally needs an LTC taker — tracked
+      as the open zeto.cash integration question below.
+- [ ] Changelog entry once the branch is ready to merge.
 
 ### M7 — Later (out of scope for now)
 

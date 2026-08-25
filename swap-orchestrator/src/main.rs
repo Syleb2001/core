@@ -22,7 +22,10 @@ use swap_env::config::{
     default_price_ticker_validity_duration_secs,
 };
 use swap_env::prompt as config_prompt;
-use swap_env::{defaults::GetDefaults, env::Mainnet, env::Testnet};
+use swap_env::{
+    defaults::GetDefaults,
+    env::{LitecoinMainnet, LitecoinTestnet, Mainnet, Testnet},
+};
 use url::Url;
 
 /// Environment variables that together configure the Cloudflare Tunnel
@@ -192,24 +195,41 @@ fn main() {
     let source_build_context = images::source_build_context(gh_token.as_deref());
 
     let want_tor = prompt::tor_for_daemons();
-    let (bitcoin_network, monero_network) = prompt::network();
+    let (chain, bitcoin_network, monero_network) = prompt::network();
 
-    let defaults = match (bitcoin_network, monero_network) {
-        (bitcoin::Network::Bitcoin, monero_address::Network::Mainnet) => {
-            Mainnet::get_config_file_defaults().expect("defaults to be available")
-        }
-        (bitcoin::Network::Testnet, monero_address::Network::Stagenet) => {
-            Testnet::get_config_file_defaults().expect("defaults to be available")
-        }
-        _ => panic!("Unsupported Bitcoin / Monero network combination"),
+    let defaults = match (chain, bitcoin_network, monero_network) {
+        (
+            swap_chain::Chain::Bitcoin,
+            bitcoin::Network::Bitcoin,
+            monero_address::Network::Mainnet,
+        ) => Mainnet::get_config_file_defaults().expect("defaults to be available"),
+        (
+            swap_chain::Chain::Bitcoin,
+            bitcoin::Network::Testnet,
+            monero_address::Network::Stagenet,
+        ) => Testnet::get_config_file_defaults().expect("defaults to be available"),
+        (
+            swap_chain::Chain::Litecoin,
+            bitcoin::Network::Bitcoin,
+            monero_address::Network::Mainnet,
+        ) => LitecoinMainnet::get_config_file_defaults().expect("defaults to be available"),
+        (
+            swap_chain::Chain::Litecoin,
+            bitcoin::Network::Testnet,
+            monero_address::Network::Stagenet,
+        ) => LitecoinTestnet::get_config_file_defaults().expect("defaults to be available"),
+        _ => panic!("Unsupported chain / network combination"),
     };
 
     let recipe = OrchestratorInput {
-        ports: OrchestratorNetworks {
-            monero: monero_network,
-            bitcoin: bitcoin_network,
-        }
-        .into(),
+        chain,
+        ports: compose::OrchestratorPorts::for_chain(
+            chain,
+            OrchestratorNetworks {
+                monero: monero_network,
+                bitcoin: bitcoin_network,
+            },
+        ),
         networks: OrchestratorNetworks {
             monero: monero_network,
             bitcoin: bitcoin_network,
@@ -220,6 +240,8 @@ fn main() {
             monerod: OrchestratorImage::Registry(images::MONEROD_IMAGE.to_string()),
             electrs: OrchestratorImage::Registry(images::ELECTRS_IMAGE.to_string()),
             bitcoind: OrchestratorImage::Registry(images::BITCOIND_IMAGE.to_string()),
+            litecoind: OrchestratorImage::Registry(images::LITECOIND_IMAGE.to_string()),
+            fulcrum: OrchestratorImage::Registry(images::FULCRUM_IMAGE.to_string()),
             tor: OrchestratorImage::Registry(images::TOR_IMAGE.to_string()),
             // TODO: Allow pre-built images here
             asb: OrchestratorImage::Build(images::asb_image_from_source(&source_build_context)),
@@ -316,10 +338,10 @@ fn main() {
 
     // If the config is invalid or doesn't exist, we prompt the user
     if let Some(should_move_old_file) = should_prompt_config_wizard {
-        let min_buy_btc = config_prompt::min_buy_amount(swap_chain::Chain::Bitcoin)
-            .expect("Failed to prompt for min buy amount");
-        let max_buy_btc = config_prompt::max_buy_amount(swap_chain::Chain::Bitcoin)
-            .expect("Failed to prompt for max buy amount");
+        let min_buy_btc =
+            config_prompt::min_buy_amount(chain).expect("Failed to prompt for min buy amount");
+        let max_buy_btc =
+            config_prompt::max_buy_amount(chain).expect("Failed to prompt for max buy amount");
         let ask_spread = config_prompt::ask_spread().expect("Failed to prompt for ask spread");
         let rendezvous_points =
             config_prompt::rendezvous_points().expect("Failed to prompt for rendezvous points");
@@ -328,12 +350,19 @@ fn main() {
         let listen_addresses = config_prompt::listen_addresses(&defaults.listen_address_tcp)
             .expect("Failed to prompt for listen addresses");
         let monero_node_type = prompt::monero_node_type();
-        let electrum_server_type = prompt::electrum_server_type(&defaults.electrum_rpc_urls);
+        let electrum_server_type = prompt::electrum_server_type(chain, &defaults.electrum_rpc_urls);
         let developer_tip =
             config_prompt::developer_tip().expect("Failed to prompt for developer tip");
 
-        let electrs_url = Url::parse(&format!("tcp://electrs:{}", recipe.ports.electrs))
-            .expect("electrs url to be convertible to a valid url");
+        let electrum_service = match chain {
+            swap_chain::Chain::Bitcoin => "electrs",
+            swap_chain::Chain::Litecoin => "fulcrum",
+        };
+        let electrs_url = Url::parse(&format!(
+            "tcp://{electrum_service}:{}",
+            recipe.ports.electrs
+        ))
+        .expect("electrum url to be convertible to a valid url");
         let monerod_daemon_url =
             Url::parse(&format!("http://monerod:{}", recipe.ports.monerod_rpc))
                 .expect("monerod daemon url to be convertible to a valid url");
@@ -348,11 +377,13 @@ fn main() {
                 external_addresses: vec![],
                 prometheus_port: None,
             },
-            bitcoin: Some(Bitcoin {
-                electrum_rpc_urls: match electrum_server_type {
-                    // If user chose the included option, we will use the electrs url from the container
-                    prompt::ElectrumServerType::Included => vec![electrs_url],
-                    prompt::ElectrumServerType::Remote(electrum_servers) => electrum_servers,
+            bitcoin: (chain == swap_chain::Chain::Bitcoin).then(|| Bitcoin {
+                electrum_rpc_urls: match &electrum_server_type {
+                    // If user chose the included option, we will use the electrum url from the container
+                    prompt::ElectrumServerType::Included => vec![electrs_url.clone()],
+                    prompt::ElectrumServerType::Remote(electrum_servers) => {
+                        electrum_servers.clone()
+                    }
                 },
                 network: bitcoin_network,
                 target_block: defaults.bitcoin_confirmation_target,
@@ -360,8 +391,18 @@ fn main() {
                 // This means that we will use the default set in swap-env/src/env.rs
                 finality_confirmations: None,
             }),
-            // The orchestrator only generates Bitcoin deployments for now
-            litecoin: None,
+            litecoin: (chain == swap_chain::Chain::Litecoin).then(|| Bitcoin {
+                electrum_rpc_urls: match &electrum_server_type {
+                    prompt::ElectrumServerType::Included => vec![electrs_url.clone()],
+                    prompt::ElectrumServerType::Remote(electrum_servers) => {
+                        electrum_servers.clone()
+                    }
+                },
+                network: bitcoin_network,
+                target_block: defaults.bitcoin_confirmation_target,
+                use_mempool_space_fee_estimation: defaults.use_mempool_space_fee_estimation,
+                finality_confirmations: None,
+            }),
             monero: Monero {
                 daemon_url: match monero_node_type.clone() {
                     prompt::MoneroNodeType::Included => Some(monerod_daemon_url),
@@ -442,6 +483,7 @@ fn main() {
                 metrics,
                 recipe.ports.asb_metrics_port,
                 cloudflared_config.is_some(),
+                recipe.chain == swap_chain::Chain::Bitcoin,
             ),
         )
         .expect("Failed to write prometheus.yml");
