@@ -46,6 +46,19 @@ RUN set -eu; \
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
+# Pre-install the extra targets rust-toolchain.toml asks for, in a cached
+# layer with retries. cargo-chef replays the toolchain file during cook,
+# and a flaky component download there fails the whole (uncached) step.
+RUN set -eu; \
+    targets=$(awk -F'"' '/^[[:space:]]*targets[[:space:]]*=/ { for (i = 2; i <= NF; i += 2) printf "%s ", $i }' /tmp/rust-toolchain.toml); \
+    [ -z "$targets" ] && exit 0; \
+    for attempt in 1 2 3; do \
+        if rustup target add $targets; then exit 0; fi; \
+        echo "rustup target add failed (attempt $attempt), retrying..."; \
+        sleep 5; \
+    done; \
+    exit 1
+
 # We use cargo-chef to cache our dependency graph (recipe.json)
 RUN cargo install cargo-chef --locked
 
